@@ -27,8 +27,15 @@
     } catch (e) {
       throw new Error('Network error (offline, blocked, or the provider refused cross-origin requests).');
     }
-    if (!res.ok) throw new Error('HTTP ' + res.status + ' from ' + new URL(url).host);
-    return res.json();
+    // Providers explain errors in the body (Twelve Data sends a JSON message
+    // with its 4xx), so read it before giving up on the status code.
+    let body = null;
+    try { body = await res.json(); } catch (e) { /* not JSON */ }
+    if (!res.ok && !(body && (body.message || body.status === 'error'))) {
+      throw new Error('HTTP ' + res.status + ' from ' + new URL(url).host);
+    }
+    if (body === null) throw new Error('Unreadable response from ' + new URL(url).host);
+    return body;
   }
 
   function clean(bars) {
@@ -47,9 +54,15 @@
       + '&symbol=' + encodeURIComponent(sym.base) + (sym.india ? '&exchange=' + sym.market : '')
       + '&apikey=' + encodeURIComponent(key);
     const j = await getJSON(url);
-    if (j.status === 'error') {
-      throw new Error('Twelve Data: ' + j.message + (sym.india
-        ? ' Indian exchanges may need a paid Twelve Data plan. Try Alpha Vantage (BSE, last 100 days) or upload a CSV from nseindia.com / your broker.' : ''));
+    if (j.status === 'error' || j.code >= 400) {
+      const msg = String(j.message || '');
+      let hint = '';
+      if (/plan|upgrade|subscri|access|available starting/i.test(msg)) {
+        hint = sym.india ? ' Your Twelve Data plan does not cover ' + sym.market + '. Try Alpha Vantage (BSE, last 100 days) or upload a CSV from nseindia.com / your broker.' : '';
+      } else if (/symbol|figi|not found|invalid/i.test(msg)) {
+        hint = ' Check that ' + sym.base + ' trades on ' + (sym.india ? sym.market + ' (Indian tickers look like RELIANCE, TCS, INFY)' : 'a US exchange') + ', and that the Market setting matches.';
+      }
+      throw new Error('Twelve Data: ' + msg + ' (looked up ' + sym.base + (sym.india ? ' on ' + sym.market : ' in the US') + ').' + hint);
     }
     return clean((j.values || []).map(v => ({
       t: v.datetime.slice(0, 10), o: +v.open, h: +v.high, l: +v.low, c: +v.close, v: +v.volume,
