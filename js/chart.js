@@ -129,9 +129,12 @@
     });
   }
 
-  function fmtMoney(v) {
-    const s = Math.abs(v) >= 1000 ? Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 }) : Math.abs(v).toFixed(2);
-    return (v < 0 ? '-$' : '$') + s;
+  // Currency follows the loaded market unless given: '$' (US) or '₹' (India,
+  // grouped the Indian way: 1,00,000).
+  function fmtMoney(v, ccy = TD.ccy || '$') {
+    const locale = ccy === '₹' ? 'en-IN' : 'en-US';
+    const s = Math.abs(v) >= 1000 ? Math.abs(v).toLocaleString(locale, { maximumFractionDigits: 0 }) : Math.abs(v).toFixed(2);
+    return (v < 0 ? '-' : '') + ccy + s;
   }
 
   TD.chart = { candles, histogram, lines, fmtMoney };

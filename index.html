@@ -27,7 +27,14 @@
   <div class="panel">
     <h2>Trade idea</h2>
     <form class="fields" id="ideaForm">
-      <label>Ticker <input name="symbol" value="AAPL" required autocomplete="off"></label>
+      <label>Market
+        <select name="market">
+          <option value="US">US (NYSE / Nasdaq)</option>
+          <option value="NSE">India · NSE</option>
+          <option value="BSE">India · BSE</option>
+        </select>
+      </label>
+      <label>Ticker <input name="symbol" value="AAPL" required autocomplete="off" placeholder="AAPL, RELIANCE, TCS.NS"></label>
       <label>Data source
         <select name="source">
           <option value="twelve">Twelve Data (free key)</option>
@@ -52,8 +59,9 @@
       <label>Target (optional) <input name="target" type="number" step="any" placeholder="auto"></label>
       <label class="opt">Strike <input name="strike" type="number" step="any"></label>
       <label class="opt">Premium / share <input name="premium" type="number" step="any"></label>
+      <label class="opt">Contract size / lot size <input name="mult" type="number" step="1" min="1" value="100"></label>
       <label>Horizon / days to expiry (trading days) <input name="horizon" type="number" value="20" min="1" max="252"></label>
-      <label>Account size ($) <input name="account" type="number" value="25000" min="1"></label>
+      <label>Account size (<span class="ccy">$</span>) <input name="account" type="number" value="25000" min="1"></label>
       <label>Max risk per trade (%) <input name="riskPct" type="number" value="1" step="0.1" min="0.1"></label>
       <label>Max position (% of account) <input name="maxPosPct" type="number" value="20" min="1" max="100"></label>
       <label>Simulations <input name="sims" type="number" value="10000" min="1000" max="100000" step="1000"></label>
@@ -94,14 +102,18 @@
   <div class="panel">
     <h2><span class="n">7</span>Portfolio Tracker</h2>
     <form class="fields" id="posForm">
-      <label>Ticker <input name="symbol" required></label>
+      <label>Ticker (.NS / .BO for India) <input name="symbol" required></label>
       <label>Shares <input name="shares" type="number" step="any" required></label>
       <label>Cost / share <input name="cost" type="number" step="any" required></label>
       <label>Current price <input name="price" type="number" step="any" required></label>
       <label>Target weight % <input name="target" type="number" step="any" placeholder="optional"></label>
       <button class="primary" type="submit">Add / update</button>
     </form>
-    <div class="row" style="margin-top:10px"><label style="flex-direction:row;align-items:center;gap:8px">Cash ($) <input id="cash" type="number" step="any" style="width:140px"></label></div>
+    <div class="row" style="margin-top:10px">
+      <label style="flex-direction:row;align-items:center;gap:8px">Cash, US ($) <input id="cashUS" type="number" step="any" style="width:140px"></label>
+      <label style="flex-direction:row;align-items:center;gap:8px">Cash, India (₹) <input id="cashIN" type="number" step="any" style="width:140px"></label>
+    </div>
+    <p class="muted">Indian tickers take a suffix: RELIANCE.NS (NSE) or RELIANCE.BO (BSE). US and Indian holdings are totalled separately; rupees and dollars are never added together.</p>
   </div>
   <div id="pfOut"></div>
 </section>
@@ -112,7 +124,7 @@
     <h2><span class="n">9</span>Trade Journal</h2>
     <form class="fields" id="jForm">
       <label>Date <input name="date" type="date" required></label>
-      <label>Ticker <input name="symbol" required></label>
+      <label>Ticker (.NS / .BO for India) <input name="symbol" required></label>
       <label>Side <select name="side"><option>long</option><option>short</option></select></label>
       <label>Size (shares) <input name="size" type="number" step="any" required></label>
       <label>Entry <input name="entry" type="number" step="any" required></label>
@@ -132,7 +144,7 @@
     <h2><span class="n">11</span>Alert System</h2>
     <p class="muted">This is a static site, so alerts are checked when a ticker is loaded on the Desk, while this page is open. For alerts while you're away, use a broker or a scheduled job.</p>
     <form class="fields" id="aForm">
-      <label>Ticker <input name="symbol" required></label>
+      <label>Ticker (.NS / .BO for India) <input name="symbol" required></label>
       <label>Condition <select name="type" id="aType"></select></label>
       <label>Value <input name="value" required></label>
       <button class="primary" type="submit">Add alert</button>
@@ -159,6 +171,7 @@
       <li>Alpha Vantage: alphavantage.co/support/#api-key: the free tier gives the last 100 daily bars only (too short for the 200-day average or a 12-month backtest).</li>
       <li>Finnhub: finnhub.io/register: company news on the free tier.</li>
       <li>No key? Export daily OHLCV as CSV from your broker or a charting site and use "Upload CSV".</li>
+      <li><b>India:</b> Twelve Data is asked for NSE/BSE directly, but its free plan may not include Indian exchanges; the app shows Twelve Data's own message if not. Alpha Vantage's free key covers BSE (last 100 days). For full history, download a CSV from nseindia.com (Get Quote → Historical Data) or bseindia.com, or export from your broker (e.g. Zerodha Console), then use "Upload CSV". Free news covers US companies only.</li>
     </ul>
     <div id="keyMsg" class="muted"></div>
   </div>

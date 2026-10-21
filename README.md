@@ -34,6 +34,25 @@ only to their provider.
 - **CSV upload**: any `Date,Open,High,Low,Close[,Adj Close],Volume` export.
 - **Demo**: synthetic prices seeded from the ticker name, clearly bannered. Not real.
 
+## US and Indian markets
+
+Pick **Market** on the Desk (US, India · NSE, India · BSE), or type the suffix
+yourself: `RELIANCE.NS` (NSE), `RELIANCE.BO` (BSE). The suffix is how the
+Portfolio, Journal and Alerts tabs know a ticker's market.
+
+| | US | India |
+|---|---|---|
+| Prices | Twelve Data (free) | Twelve Data with `exchange=NSE/BSE` (the free plan may not include Indian exchanges; its message is shown), Alpha Vantage BSE listing (free, 100 bars), or CSV |
+| CSV | Yahoo/broker exports, MM/DD dates | nseindia.com / bseindia.com historical downloads, broker exports; quoted `"2,912.40"` numbers, `18-Oct-2025` and DD/MM dates |
+| News | Finnhub | Not available on free feeds |
+| Currency | $ | ₹ with Indian digit grouping (₹1,00,000) |
+| Options | 100 shares per contract | Lot size entered by you (NSE sets and revises it per contract) |
+| Backtest cost default | 5 bps per side | 15 bps per side (STT, exchange, GST, stamp duty) |
+| Extra risk warnings | | No overnight shorts in cash equities, circuit limits, delivery charges |
+
+Portfolio and Journal keep US and Indian holdings in separate sections with
+separate totals. Rupees and dollars are never added together.
+
 ## Host it free
 
 **GitHub Pages:** the workflow in `.github/workflows/pages.yml` publishes the

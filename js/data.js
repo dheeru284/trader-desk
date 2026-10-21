@@ -4,6 +4,22 @@
 (function (TD) {
   'use strict';
 
+  // Markets. A symbol's id carries its market: AAPL (US), RELIANCE.NS (NSE),
+  // RELIANCE.BO (BSE), the suffixes Indian brokers and Yahoo use.
+  const MARKETS = {
+    US: { name: 'US', ccy: '$', locale: 'en-US', suffix: '', mult: 100, costBps: 5 },
+    NSE: { name: 'India · NSE', ccy: '₹', locale: 'en-IN', suffix: '.NS', mult: NaN, costBps: 15 },
+    BSE: { name: 'India · BSE', ccy: '₹', locale: 'en-IN', suffix: '.BO', mult: NaN, costBps: 15 },
+  };
+  function parseSymbol(raw, market = 'US') {
+    let base = String(raw).trim().toUpperCase(), m = market;
+    const sfx = base.match(/\.(NS|NSE|BO|BSE)$/);
+    if (sfx) { m = sfx[1].startsWith('N') ? 'NSE' : 'BSE'; base = base.slice(0, sfx.index); }
+    return { base, market: m, id: base + MARKETS[m].suffix, india: m !== 'US', ...MARKETS[m] };
+  }
+  const marketOf = id => /\.NS$/.test(id) ? 'NSE' : /\.BO$/.test(id) ? 'BSE' : 'US';
+  const ccyOf = id => MARKETS[marketOf(id)].ccy;
+
   async function getJSON(url) {
     let res;
     try {
@@ -22,23 +38,32 @@
       .sort((a, b) => a.t < b.t ? -1 : a.t > b.t ? 1 : 0);
   }
 
-  // Twelve Data: free tier, up to 5000 daily bars, 8 req/min, 800/day.
-  async function twelveData(symbol, key) {
+  // Twelve Data: free tier, up to 5000 daily bars, 8 req/min, 800/day. Indian
+  // exchanges are requested with exchange=NSE/BSE; whether the free plan covers
+  // them is Twelve Data's call, so its own error message is passed through.
+  async function twelveData(sym, key) {
     if (!key) throw new Error('No Twelve Data key. Add a free one in Settings.');
     const url = 'https://api.twelvedata.com/time_series?interval=1day&outputsize=600'
-      + '&symbol=' + encodeURIComponent(symbol) + '&apikey=' + encodeURIComponent(key);
+      + '&symbol=' + encodeURIComponent(sym.base) + (sym.india ? '&exchange=' + sym.market : '')
+      + '&apikey=' + encodeURIComponent(key);
     const j = await getJSON(url);
-    if (j.status === 'error') throw new Error('Twelve Data: ' + j.message);
+    if (j.status === 'error') {
+      throw new Error('Twelve Data: ' + j.message + (sym.india
+        ? ' Indian exchanges may need a paid Twelve Data plan. Try Alpha Vantage (BSE, last 100 days) or upload a CSV from nseindia.com / your broker.' : ''));
+    }
     return clean((j.values || []).map(v => ({
       t: v.datetime.slice(0, 10), o: +v.open, h: +v.high, l: +v.low, c: +v.close, v: +v.volume,
     })));
   }
 
   // Alpha Vantage: free tier returns only the last 100 daily bars ("compact").
-  async function alphaVantage(symbol, key) {
+  // It lists Indian stocks on BSE only (RELIANCE.BSE), so NSE requests use the
+  // BSE listing of the same company.
+  async function alphaVantage(sym, key) {
     if (!key) throw new Error('No Alpha Vantage key. Add a free one in Settings.');
+    const avSymbol = sym.india ? sym.base + '.BSE' : sym.base;
     const url = 'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&outputsize=compact'
-      + '&symbol=' + encodeURIComponent(symbol) + '&apikey=' + encodeURIComponent(key);
+      + '&symbol=' + encodeURIComponent(avSymbol) + '&apikey=' + encodeURIComponent(key);
     const j = await getJSON(url);
     const series = j['Time Series (Daily)'];
     if (!series) throw new Error('Alpha Vantage: ' + (j['Error Message'] || j.Note || j.Information || 'no data'));
@@ -48,8 +73,10 @@
   }
 
   // Finnhub company news (free tier). Returns [{time, headline, source, summary, url}].
-  async function finnhubNews(symbol, key, days = 14) {
+  async function finnhubNews(sym, key, days = 14) {
+    if (sym.india) throw new Error('the free Finnhub feed covers North American companies only, so there are no NSE/BSE headlines here. Check Moneycontrol, Economic Times or NSE corporate announcements before entering.');
     if (!key) throw new Error('No Finnhub key. News needs a free key from finnhub.io.');
+    const symbol = sym.base;
     const to = new Date(), from = new Date(Date.now() - days * 864e5);
     const d = x => x.toISOString().slice(0, 10);
     const url = 'https://finnhub.io/api/v1/company-news?symbol=' + encodeURIComponent(symbol)
@@ -62,26 +89,58 @@
     }));
   }
 
-  // CSV with a header row. Accepts Yahoo/Stooq/broker exports:
-  // Date,Open,High,Low,Close[,Adj Close],Volume (column order may vary).
-  function parseCSV(text) {
-    const lines = text.trim().split(/\r?\n/).filter(Boolean);
+  // CSV with a header row. Accepts Yahoo/Stooq/broker exports and NSE/BSE
+  // historical-data downloads (quoted "1,234.50" numbers, DD-MMM-YYYY dates,
+  // newest-first rows, headers like "OPEN " or "Close Price").
+  function splitCSVLine(line, delim) {
+    const out = [];
+    let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; }
+      else if (ch === delim && !q) { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    out.push(cur);
+    return out.map(f => f.trim());
+  }
+  const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+  function parseDate(raw, dayFirst) {
+    const s = raw.trim(), pad = n => String(n).padStart(2, '0');
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) return m[1] + '-' + pad(m[2]) + '-' + pad(m[3]);
+    m = s.match(/^(\d{1,2})[-\/ ]([A-Za-z]{3})[A-Za-z]*[-\/ ,]+(\d{4})/);
+    if (m && MONTHS[m[2].toLowerCase()]) return m[3] + '-' + pad(MONTHS[m[2].toLowerCase()]) + '-' + pad(m[1]);
+    m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/);
+    if (m) {
+      let d = +m[1], mo = +m[2];
+      if (!dayFirst && mo <= 12 && d <= 12) [d, mo] = [mo, d];   // US style MM/DD/YYYY
+      else if (mo > 12) [d, mo] = [mo, d];
+      return m[3] + '-' + pad(mo) + '-' + pad(d);
+    }
+    const dt = new Date(s);
+    return isNaN(dt) ? '' : dt.toISOString().slice(0, 10);
+  }
+  function parseCSV(text, dayFirst = false) {
+    const lines = text.replace(/^﻿/, '').trim().split(/\r?\n/).filter(l => l.trim());
     if (lines.length < 2) throw new Error('CSV has no data rows.');
-    const head = lines[0].split(/[,;\t]/).map(h => h.trim().toLowerCase().replace(/"/g, ''));
-    const col = name => head.findIndex(h => h === name || h.startsWith(name));
-    const iT = col('date') >= 0 ? col('date') : col('time');
-    const iO = col('open'), iH = col('high'), iL = col('low'), iV = col('vol');
-    const iC = head.indexOf('close') >= 0 ? head.indexOf('close') : col('close');
+    const delim = [',', ';', '\t'].sort((a, b) => lines[0].split(b).length - lines[0].split(a).length)[0];
+    const head = splitCSVLine(lines[0], delim).map(h => h.toLowerCase().replace(/\s+/g, ' ').trim());
+    const find = (...names) => {
+      for (const n of names) { const i = head.indexOf(n); if (i >= 0) return i; }
+      for (const n of names) { const i = head.findIndex(h => h.startsWith(n)); if (i >= 0) return i; }
+      return -1;
+    };
+    const iT = find('date', 'timestamp', 'time'), iO = find('open'), iH = find('high'), iL = find('low');
+    const iC = find('close', 'close price', 'closing price');
+    const iV = find('volume', 'total traded quantity', 'no.of shares', 'no. of shares', 'shares traded', 'vol');
     if ([iT, iO, iH, iL, iC].some(i => i < 0)) {
       throw new Error('CSV needs Date, Open, High, Low, Close columns. Found: ' + head.join(', '));
     }
-    const num = s => +String(s).replace(/["$\s]/g, '');
+    const num = s => +String(s || '').replace(/[",$₹\s]/g, '');
     const bars = lines.slice(1).map(line => {
-      const f = line.split(/[,;\t]/);
-      const raw = String(f[iT]).replace(/"/g, '').trim();
-      const dt = new Date(raw);
-      const t = isNaN(dt) ? raw.slice(0, 10) : dt.toISOString().slice(0, 10);
-      return { t, o: num(f[iO]), h: num(f[iH]), l: num(f[iL]), c: num(f[iC]), v: iV >= 0 ? num(f[iV]) : 0 };
+      const f = splitCSVLine(line, delim);
+      return { t: parseDate(f[iT] || '', dayFirst), o: num(f[iO]), h: num(f[iH]), l: num(f[iL]), c: num(f[iC]), v: iV >= 0 ? num(f[iV]) : 0 };
     });
     const out = clean(bars);
     if (out.length < 30) throw new Error('CSV parsed to only ' + out.length + ' valid rows; need at least 30.');
@@ -117,5 +176,5 @@
     return bars;
   }
 
-  TD.data = { twelveData, alphaVantage, finnhubNews, parseCSV, synthetic };
+  TD.data = { MARKETS, parseSymbol, marketOf, ccyOf, twelveData, alphaVantage, finnhubNews, parseCSV, parseDate, synthetic };
 })(window.TD = window.TD || {});

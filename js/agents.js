@@ -199,13 +199,18 @@
       maxLoss = qty * per;
       if (per < 1.0 * o.atr) warnings.push('Stop is inside 1 ATR: likely to be hit by normal noise.');
       warnings.push('Stop loss assumes a fill at the stop. Overnight gaps can fill worse.');
+      if (o.india) {
+        if (o.side === 'short') warnings.push('Indian cash equities cannot be held short overnight: a delivery short must be squared off the same day. A multi-day short needs stock futures or options.');
+        warnings.push('NSE/BSE price bands (circuit limits) can lock a stock at its limit; a stop may not fill until trading reopens inside the band.');
+        warnings.push('Delivery trades pay STT and other charges of roughly 0.25% round trip before brokerage; a tight stop loses proportionally more to costs.');
+      }
     } else {
-      unit = 'contracts';
-      const perContract = o.premium * 100;
+      unit = o.india ? 'lots' : 'contracts';
+      const perContract = o.premium * o.mult;
       qty = Math.floor(riskDollars / perContract);
       posValue = qty * perContract;
       maxLoss = posValue;
-      if (qty === 0) warnings.push('One contract costs $' + perContract.toFixed(0) + ', more than your $' + riskDollars.toFixed(0) + ' risk budget. Size is 0.');
+      if (qty === 0) warnings.push('One ' + (o.india ? 'lot' : 'contract') + ' costs ' + TD.chart.fmtMoney(perContract) + ', more than your ' + TD.chart.fmtMoney(riskDollars) + ' risk budget. Size is 0.');
       warnings.push('Long options can lose 100% of premium; size treats the whole premium as at risk.');
     }
     if (o.riskPct > 2) warnings.push('Risk above 2% per trade: a 10-trade losing streak costs ' + (100 - 100 * Math.pow(1 - o.riskPct / 100, 10)).toFixed(0) + '% of the account.');
@@ -244,7 +249,7 @@
         if (outcome === -1) hitStop++; else if (outcome === 1) hitTarget++; else expired++;
       } else {
         const intrinsic = o.instrument === 'call' ? Math.max(S - o.strike, 0) : Math.max(o.strike - S, 0);
-        pnl[s] = (intrinsic - o.premium) * 100 * o.qty;
+        pnl[s] = (intrinsic - o.premium) * o.mult * o.qty;
         if (intrinsic === 0) hitStop++;
         else if (intrinsic >= 2 * o.premium) hitTarget++;
         else expired++;
