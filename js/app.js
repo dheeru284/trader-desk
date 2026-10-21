@@ -206,7 +206,7 @@
       + n.tags.map(t => '<span class="tag">' + esc(t) + '</span>').join('') + '</li>').join('');
     html.push('<div class="grid"><div class="panel news"><h2><span class="n">2</span>News Monitor</h2>'
       + (x.newsErr ? '<p class="muted">News unavailable: ' + esc(x.newsErr) + '</p>'
-        : x.nm.items.length ? '<p>' + x.nm.items.length + ' headlines in 14 days, <b>' + x.nm.highCount + '</b> flagged high-impact.</p><ul class="plain">' + newsRows + '</ul>'
+        : x.nm.items.length ? '<p>' + x.nm.items.length + ' headlines in 14 days' + (x.nm.dupes ? ' (' + x.nm.dupes + ' duplicates removed)' : '') + ', <b>' + x.nm.highCount + '</b> flagged as events.</p><ul class="plain">' + newsRows + '</ul>'
           : '<p class="muted">No headlines in the last 14 days.</p>')
       + '<p class="muted">Upcoming earnings dates are not in this feed: check your broker before holding through one.</p></div>'
       + '<div class="panel"><h2><span class="n">8</span>Sentiment Analyzer</h2>'
@@ -222,6 +222,7 @@
       + (opt ? '<p class="muted">Option is simulated to expiry. Underlying levels to watch as invalidation:</p>' : '')
       + '<dl class="kv">' + kv(opt ? 'Underlying invalidation' : 'Stop loss', f2(x.exit.stop) + ' (' + pct(Math.abs(x.entry - x.exit.stop) / x.entry) + ')')
       + kv(opt ? 'Underlying objective' : 'Take profit 1', f2(x.exit.target) + ' (' + f2(x.exit.rr) + 'R)')
+      + (isFinite(x.exit.room) && x.exit.room < x.exit.rr ? kv('Next ' + (x.side === 'short' ? 'support' : 'resistance') + ' at', f2(x.exit.room) + 'R') : '')
       + kv(opt ? 'Stretch objective' : 'Take profit 2', f2(x.exit.target2) + ' (' + f2(Math.abs(x.exit.target2 - x.entry) / x.exit.R) + 'R)') + '</dl>'
       + '<ul class="plain" style="margin-top:8px">' + x.exit.why.map(w => '<li>' + esc(w) + '</li>').join('') + '</ul></div></div>');
 

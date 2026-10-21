@@ -67,18 +67,28 @@
   }
 
   // 2. News Monitor ----------------------------------------------------------
+  // Event words, matched as whole words in the headline only. Topic words such as
+  // "earnings", "CEO" or "tariff" are left out: on a heavily covered stock they
+  // appear in most headlines and the flag stops meaning anything.
   const IMPACT = [
-    'earnings', 'guidance', 'outlook', 'downgrade', 'upgrade', 'fda', 'sec ', 'lawsuit', 'acquisition',
-    'acquire', 'merger', 'recall', 'bankruptcy', 'layoff', 'ceo', 'cfo', 'investigation', 'probe',
-    'split', 'buyback', 'repurchase', 'dividend', 'offering', 'antitrust', 'tariff', 'resign', 'delist',
+    'downgrade', 'downgraded', 'upgrade', 'upgraded', 'guidance', 'beats', 'misses', 'fda', 'sec', 'lawsuit',
+    'sued', 'acquire', 'acquires', 'acquisition', 'merger', 'recall', 'bankruptcy', 'layoffs', 'investigation',
+    'probe', 'subpoena', 'buyback', 'repurchase', 'antitrust', 'resigns', 'delist', 'delisted', 'halted', 'offering',
   ];
+  const IMPACT_RE = new RegExp('\\b(' + IMPACT.join('|') + ')\\b', 'gi');
   function newsMonitor(news) {
-    const items = news.slice().sort((a, b) => b.time - a.time).map(n => {
-      const text = (n.headline + ' ' + n.summary).toLowerCase();
-      const tags = IMPACT.filter(k => text.includes(k)).map(k => k.trim());
+    const seen = new Set();
+    const items = news.slice().sort((a, b) => b.time - a.time).filter(n => {
+      // Syndicated copies of one story carry the same headline.
+      const key = n.headline.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 80);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).map(n => {
+      const tags = [...new Set((n.headline.match(IMPACT_RE) || []).map(t => t.toLowerCase()))];
       return { ...n, tags, high: tags.length > 0 };
     });
-    return { items, highCount: items.filter(i => i.high).length };
+    return { items, highCount: items.filter(i => i.high).length, dupes: news.length - items.length };
   }
 
   // 8. Sentiment Analyzer (headline lexicon; crude by design) ----------------
@@ -130,7 +140,10 @@
         : 'No overhead level in range; target set at 2R.');
     }
     const target2 = entry + dir * Math.max(3 * R, Math.abs(target - entry) + R);
-    return { stop, target, target2, R, rr: Math.abs(target - entry) / R, why };
+    // Room to the first opposing level, which caps a realistic reward even when
+    // the target is set beyond it.
+    const room = obstacle ? Math.abs(obstacle.price - entry) / R : Infinity;
+    return { stop, target, target2, R, rr: Math.abs(target - entry) / R, room, why };
   }
 
   // 3. Entry Timer -----------------------------------------------------------
@@ -146,7 +159,10 @@
     const lvl = dir > 0 ? scan.support[0] : scan.resistance[0];
     add(!!lvl && Math.abs(entry - lvl.price) <= 1.0 * a, 'Entry within 1 ATR of ' + (dir > 0 ? 'support' : 'resistance'));
     add(Math.abs(entry - p) <= 1.5 * a, 'Entry within 1.5 ATR of last close (realistic fill)', 0.5);
-    add(exit.rr >= 2, 'Reward:risk >= 2 (' + exit.rr.toFixed(2) + ')');
+    const rrEff = Math.min(exit.rr, exit.room);
+    add(rrEff >= 2, exit.room < exit.rr
+      ? 'Reward:risk >= 2 before the next ' + (dir > 0 ? 'resistance' : 'support') + ' (' + rrEff.toFixed(2) + ')'
+      : 'Reward:risk >= 2 (' + rrEff.toFixed(2) + ')');
 
     const max = checks.reduce((s, c) => s + c.w, 0);
     const score = checks.reduce((s, c) => s + (c.ok ? c.w : 0), 0);
@@ -405,7 +421,7 @@
       else if (tm.avg <= 0) reasons.push('simulated mean P&L not positive');
       if (tm.pStop > 0.5) { pts -= 1; reasons.push('simulated stop-out/expire-worthless rate ' + (tm.pStop * 100).toFixed(0) + '%'); }
     }
-    if (news && news.highCount > 0) reasons.push(news.highCount + ' high-impact headline(s): event risk');
+    if (news && news.highCount > 0) reasons.push(news.highCount + ' event headline(s) in 14 days: check them before entering');
     if (sent && sent.label === 'Negative') { pts -= 1; reasons.push('headline sentiment negative'); }
     const level = pts >= 3 ? 'High' : pts >= 1 ? 'Medium' : 'Low';
     return { level, reasons };
