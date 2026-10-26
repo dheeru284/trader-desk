@@ -1,19 +1,22 @@
-name: Deploy Trader Desk to GitHub Pages
+name: Update data and deploy Trader Desk
 
 on:
   push:
     branches: [main]
     paths-ignore: ["README.md"]
+  schedule:
+    # Weekdays after the US close (India closed hours earlier).
+    - cron: "40 21 * * 1-5"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -23,6 +26,26 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Fetch market data
+        if: github.event_name != 'push'
+        env:
+          # SEC asks every client to identify itself with a name and email.
+          # Set a repository variable SEC_USER_AGENT ("Your Name you@example.com") to use your own.
+          SEC_USER_AGENT: ${{ vars.SEC_USER_AGENT || 'Trader Desk dheeru284 (github.com/dheeru284/trader-desk) dheeru284@users.noreply.github.com' }}
+        run: python3 scripts/fetch_data.py
+
+      - name: Commit data
+        if: github.event_name != 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then echo "No data changes"; else
+            git commit -m "Update market data $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

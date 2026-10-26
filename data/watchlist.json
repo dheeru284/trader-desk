@@ -1,0 +1,5 @@
+{
+  "note": "Tickers the scheduled job downloads daily prices for. Edit this file on GitHub to change the list. US tickers as-is, NSE with .NS, BSE with .BO.",
+  "us": ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "JPM", "V", "MA", "UNH", "XOM", "JNJ", "PG", "HD", "COST", "AVGO", "AMD", "NFLX", "CRM", "ORCL", "KO", "PEP", "BAC", "WMT", "DIS", "INTC", "SPY", "QQQ"],
+  "india": ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS", "BHARTIARTL.NS", "SBIN.NS", "ITC.NS", "LT.NS", "HINDUNILVR.NS", "KOTAKBANK.NS", "AXISBANK.NS", "BAJFINANCE.NS", "MARUTI.NS", "SUNPHARMA.NS", "TITAN.NS", "ASIANPAINT.NS", "ULTRACEMCO.NS", "NTPC.NS", "POWERGRID.NS", "TATASTEEL.NS", "M&M.NS", "HCLTECH.NS", "WIPRO.NS", "ADANIENT.NS", "ADANIPORTS.NS", "ONGC.NS", "COALINDIA.NS", "JSWSTEEL.NS", "BAJAJFINSV.NS", "TECHM.NS", "DRREDDY.NS", "CIPLA.NS", "BEL.NS", "TRENT.NS", "ETERNAL.NS", "NIFTYBEES.NS"]
+}
