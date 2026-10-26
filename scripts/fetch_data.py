@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
-"""Scheduled data job for Trader Desk. Standard library only.
+"""Scheduled data job for Trader Desk (Indian markets). Standard library only.
 
-Runs on GitHub Actions (servers, so no browser cross-origin limits) and writes
-JSON the static site reads from its own origin:
+Runs on GitHub Actions and writes JSON the static site reads from its own
+origin:
 
-    data/prices/index.json        which tickers have daily bars, and when
-    data/prices/<file>.json       ~2 years of daily OHLCV per watchlist ticker
-    data/flows/us_13f.json        what big US funds bought and sold last quarter
-    data/flows/in_deals.json      NSE bulk and block deals, last 30 trading days
-    data/flows/in_fiidii.json     FII/FPI and DII net cash-market flows, daily
-    data/status.json              what worked and what failed on the last run
+    data/indices/index.json     every NSE index: latest close, change, returns, P/E, P/B, yield
+    data/indices/<slug>.json    daily history per index (~14 months, grows daily)
+    data/prices/index.json      which watchlist stocks have daily bars
+    data/prices/<file>.json     daily OHLCV per watchlist stock
+    data/flows/in_deals.json    NSE bulk and block deals, last 30 trading days
+    data/flows/in_fiidii.json   FII/FPI and DII net cash-market flows, daily
+    data/status.json            what worked and what failed on the last run
 
-Every section is independent: a failure is recorded in status.json and the
-previous file is kept, so one blocked source never blanks the site.
+Sources: NSE's published daily report files (index snapshot ind_close_all and
+the equity bhavcopy), requested with a user agent that names this project.
+If NSE does not serve those to an automated client, the run says so, and
+watchlist stocks fall back to Twelve Data when the TWELVE_DATA_KEY secret is
+set. Every section is independent; a failure keeps the previous files.
 
-    python3 scripts/fetch_data.py                 # everything
-    python3 scripts/fetch_data.py prices flows13f # some sections
+    python3 scripts/fetch_data.py                   # everything
+    python3 scripts/fetch_data.py nse_daily india_deals
 """
 
 import csv
@@ -34,12 +38,12 @@ import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "data")
-sys.path.insert(0, os.path.join(ROOT, "scripts", "vendor"))
-import edgar13f as E  # noqa: E402  (vendored, MIT: see scripts/vendor/NOTICE.md)
-
 BROWSER_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/126.0 Safari/537.36")
+HONEST_UA = "trader-desk/1.0 (+https://github.com/dheeru284/trader-desk)"
+ARCHIVE = "https://nsearchives.nseindia.com"
 NOW = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+BACKFILL_DAYS = 430
 
 
 def log(*a):
@@ -74,11 +78,15 @@ def http_get(url, headers=None, opener=None, timeout=30):
         return data
 
 
-# ------------------------------------------------------------------ prices
-
 def safe_name(symbol):
     return re.sub(r"[^A-Za-z0-9.\-]", "_", symbol) + ".json"
 
+
+def slug(name):
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+# ------------------------------------------------------------------ Twelve Data
 
 def twelve_daily(symbol, key):
     """Twelve Data's official time_series API with the repository's key."""
@@ -105,117 +113,6 @@ def save_prices(index, sym, bars, label, ccy):
     fname = safe_name(sym)
     write_json("prices/" + fname, {"symbol": sym, "currency": ccy, "source": label, "fetched": NOW, "bars": bars})
     index["tickers"][sym] = {"file": fname, "last": bars[-1][0], "bars": len(bars), "source": label}
-
-
-def section_prices():
-    key = os.environ.get("TWELVE_DATA_KEY", "").strip()
-    if not key:
-        raise RuntimeError("Add your free Twelve Data key as the repository secret TWELVE_DATA_KEY "
-                           "(Settings > Secrets and variables > Actions > New repository secret) to enable the no-key watchlist.")
-    wl = read_json("watchlist.json", {})
-    index = read_json("prices/index.json", {"tickers": {}})
-    ok, failed, skip_india = {"us": 0, "india": 0}, {}, None
-    for s in (wl.get("us") or []) + (wl.get("india") or []):
-        india = s.endswith(".NS") or s.endswith(".BO")
-        if india and skip_india:
-            failed[s] = skip_india
-            continue
-        try:
-            bars = twelve_daily(s, key)
-            if len(bars) < 60:
-                raise ValueError("only %d bars" % len(bars))
-            save_prices(index, s, bars, "Twelve Data", "INR" if india else "USD")
-            ok["india" if india else "us"] += 1
-        except Exception as exc:
-            msg = str(exc)[:200]
-            failed[s] = msg
-            log("  price fail", s, msg)
-            if india and re.search(r"plan|upgrade|available starting|access", msg, re.I):
-                skip_india = "skipped: your Twelve Data plan does not include Indian exchanges (" + msg[:120] + ")"
-            if re.search(r"run out of API credits|daily limit", msg, re.I):
-                failed["(rest)"] = "stopped: Twelve Data daily credit limit reached"
-                break
-        time.sleep(8.5)  # free plan: 8 requests a minute
-    index["updated"] = NOW
-    write_json("prices/index.json", index)
-    if not (ok["us"] or ok["india"]):
-        raise RuntimeError("no prices fetched: %s" % json.dumps(failed)[:500])
-    return {"ok": ok, "failed": failed}
-
-
-# ------------------------------------------------------------------ US 13F
-
-FUNDS = ["0001067983", "0001336528", "0001350694", "0001697748", "0001536411",
-         "0001656456", "0001061768", "0001040273", "0001029160", "0001037389",
-         "0001167483", "0001135730", "0001791786", "0000949509", "0001166559"]
-FLOWS_PER_FUND = 25
-
-
-def section_flows13f():
-    ua = os.environ.get("SEC_USER_AGENT", "").strip()
-    if not ua:
-        raise RuntimeError("SEC_USER_AGENT is not set. SEC requires a name and email on every request.")
-    fetcher = E.Fetcher(ua=ua, pause=0.15)
-    filers = {f["cik"]: f for f in E.load_filers()}
-    try:
-        index = E.ticker_index(fetcher)
-    except Exception as exc:
-        log("  SEC ticker list unavailable, using the share-class map only:", exc)
-        index = None
-    overrides = E.load_overrides([E.CLASSES])
-    funds, flows, errors = [], [], {}
-    for cik in FUNDS:
-        info = filers.get(cik, {})
-        try:
-            meta, rows, _ = E.load_quarter(fetcher, cik)
-            pmeta, prows, _ = E.load_quarter(fetcher, cik, before=meta["period"])
-            now, total = E.build(meta, rows, index, overrides)
-            prev, _ = E.build(pmeta, prows, index, overrides)
-            now = [p for p in now if E.is_stock(p)]
-            prev = [p for p in prev if E.is_stock(p)]
-            names = {p["cusip"]: p.get("name") or p["issuer"] for p in prev + now}
-            moves = []
-            for d in E.diff(now, prev):
-                if d["status"] == "UNCHANGED":
-                    continue
-                sh, val = (d["shares_after"], d["value_after"]) if d["shares_after"] else (d["shares_before"], d["value_before"])
-                price = val / sh if sh else 0
-                value = abs(d["change"]) * price
-                if value <= 0:
-                    continue
-                moves.append({"player": info.get("name") or meta["filer"], "cik": cik,
-                              "stock": names.get(d["cusip"]) or E.pretty_name(d["issuer"]), "ticker": d.get("ticker"),
-                              "cusip": d["cusip"],
-                              "side": "buy" if d["status"] in ("NEW", "ADDED") else "sell",
-                              "kind": d["status"].lower().replace(" ", "_"),
-                              "shares": d["change"], "value": round(value),
-                              "change_pct": d["change_pct"]})
-            moves.sort(key=lambda m: -m["value"])
-            flows.extend(moves[:FLOWS_PER_FUND])
-            funds.append({"name": info.get("name") or meta["filer"], "person": info.get("person", ""),
-                          "cik": cik, "period": meta["period"], "prior_period": pmeta["period"],
-                          "filed": meta["filed"], "accession": meta["accession"],
-                          "portfolio_value": round(total), "moves": len(moves)})
-            log("  13F", meta["filer"], meta["period"], len(moves), "moves")
-        except Exception as exc:
-            errors[cik] = str(exc)[:300]
-            log("  13F fail", cik, exc)
-            if not funds and len(errors) >= 2 and all("403" in e for e in errors.values()):
-                raise RuntimeError("SEC refused every request (403 Forbidden). SEC needs a contact on each request: "
-                                   "set the repository variable SEC_USER_AGENT to 'Your Name your@email.com' "
-                                   "(repo Settings > Secrets and variables > Actions > Variables), then re-run.")
-    if not funds:
-        raise RuntimeError("no 13F filings read: %s" % json.dumps(errors)[:500])
-    periods = sorted({f["period"] for f in funds})
-    write_json("flows/us_13f.json", {
-        "updated": NOW, "source": "SEC EDGAR 13F-HR information tables",
-        "latest_period": periods[-1], "periods": periods, "funds": funds, "flows": flows,
-        "errors": errors,
-        "method": "Change in shares between the two latest 13F-HR filings of each fund, valued at the "
-                  "quarter-end price implied by the filing (value / shares). Long US stock positions only; "
-                  "options, bonds, shorts and trades inside the quarter are not visible.",
-    })
-    return {"funds": len(funds), "flows": len(flows), "errors": errors}
 
 
 # ------------------------------------------------------------------ India (NSE)
@@ -325,13 +222,212 @@ def section_india_fiidii():
     return {"days": len(keep)}
 
 
-SECTIONS = {"prices": section_prices, "flows13f": section_flows13f,
+# ------------------------------------------------------------------ NSE daily files
+
+def nse_report(path, timeout=60):
+    """One of NSE's published daily report files. None when there is no file for that day."""
+    try:
+        return http_get(ARCHIVE + path, {"User-Agent": HONEST_UA}, timeout=timeout).decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+
+
+def parse_day(s):
+    s = s.strip()
+    for fmt in ("%d-%m-%Y", "%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return dt.datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+    return None
+
+
+def parse_index_snapshot(text, day):
+    """ind_close_all: one row per NSE index for that day."""
+    rows = list(csv.reader(io.StringIO(text)))
+    head = [h.strip().lower() for h in rows[0]]
+
+    def col(*names):
+        for n in names:
+            for i, h in enumerate(head):
+                if h.startswith(n):
+                    return i
+        return -1
+    i = {k: col(*v) for k, v in {
+        "name": ("index name",), "date": ("index date",), "open": ("open",), "high": ("high",), "low": ("low",),
+        "close": ("closing", "close"), "pct": ("change(%)", "change (%)", "% change"), "vol": ("volume",),
+        "turn": ("turnover",), "pe": ("p/e",), "pb": ("p/b",), "dy": ("div",)}.items()}
+    if i["name"] < 0 or i["close"] < 0:
+        raise ValueError("unexpected index snapshot columns: %s" % ", ".join(head))
+    out = []
+    for r in rows[1:]:
+        if len(r) <= i["close"] or not r[i["name"]].strip():
+            continue
+        g = lambda k: num(r[i[k]]) if i[k] >= 0 and i[k] < len(r) and r[i[k]].strip() not in ("-", "") else 0.0
+        c = g("close")
+        if c <= 0:
+            continue
+        o, h, l = g("open") or c, g("high") or c, g("low") or c
+        d = parse_day(r[i["date"]]) if i["date"] >= 0 else None
+        out.append({"name": re.sub(r"\s+", " ", r[i["name"]].strip()), "bar": [(d or day).isoformat(), o, max(h, o, c), min(l, o, c), c, int(g("vol"))],
+                    "pct": g("pct"), "turnover_cr": g("turn"), "pe": g("pe"), "pb": g("pb"), "dy": g("dy")})
+    return out
+
+
+def parse_bhavcopy(text, day):
+    """sec_bhavdata_full: {symbol: bar} for EQ-series stocks."""
+    rows = list(csv.reader(io.StringIO(text)))
+    head = [h.strip().upper() for h in rows[0]]
+    ix = {k: head.index(k) for k in ("SYMBOL", "SERIES", "OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE", "TTL_TRD_QNTY")}
+    out = {}
+    for r in rows[1:]:
+        if len(r) < len(head) or r[ix["SERIES"]].strip() != "EQ":
+            continue
+        out[r[ix["SYMBOL"]].strip()] = [day.isoformat(), num(r[ix["OPEN_PRICE"]]), num(r[ix["HIGH_PRICE"]]),
+                                        num(r[ix["LOW_PRICE"]]), num(r[ix["CLOSE_PRICE"]]), int(num(r[ix["TTL_TRD_QNTY"]]))]
+    return out
+
+
+GROUPS = [
+    ("Volatility", r"\bVIX\b"),
+    ("Fixed income", r"G-?SEC|\bGILT\b|\bBOND|T-?BILL|\bSDL\b|\bAAA\b|1D RATE|TARGET MATURITY|LIQUID|MONEY MARKET|CORPORATE"),
+    ("Strategy", r"ALPHA|LOW[ -]?VOL|\bLV\b|QUALITY|QLTY|VALUE|MOMENTUM|\bMOM\b|EQUAL[ -]?WEIGHT|EQL ?WGT|\bEW\b|DIV(IDEND)? OPP|HIGH BETA|GROWTH|ARBITRAGE|LEVERAGE|INVERSE"),
+    ("Broad market", r"^NIFTY ?(50|NEXT 50|100|200|500|MIDCAP|SMALLCAP|SMLCAP|MICROCAP|LARGEMIDCAP|LARGEMID|MIDSMALLCAP|MIDSMLCAP|TOTAL MARKET|TOTAL MKT|MIDCAP SELECT|MID SELECT)( ?\d+)?( SELECT)?$|^NIFTY ?500 (MULTICAP|LARGEMIDSMALL)"),
+    ("Sectoral", r"\b(BANK|AUTO|FIN|FINANCIAL|FMCG|IT|MEDIA|METAL|PHARMA|PSU BANK|PVT BANK|PRIVATE BANK|REALTY|HEALTHCARE|CONSUMER DURABLES|OIL ?& ?GAS|OIL AND GAS|CHEMICALS|ENERGY|COMMODITIES|INFRA(STRUCTURE)?|SERVICES SECTOR|CAPITAL MARKETS|INSURANCE|TELECOM)\b"),
+]
+
+
+def group_of(name):
+    u = name.upper()
+    for g, rx in GROUPS:
+        if re.search(rx, u):
+            return g
+    return "Thematic"
+
+
+def ret(bars, n):
+    if len(bars) <= n:
+        return None
+    a, b = bars[-1 - n][4], bars[-1][4]
+    return round((b / a - 1) * 100, 2) if a else None
+
+
+def section_nse_daily():
+    wl = read_json("watchlist.json", {})
+    stocks = [s for s in (wl.get("india") or []) if s.endswith(".NS")]
+    idx_meta = read_json("indices/index.json", {"indices": {}})
+    hist = {}
+    for key, m in idx_meta["indices"].items():
+        hist[key] = {b[0]: b for b in read_json("indices/" + m["file"], {}).get("bars", [])}
+    shist = {s: {b[0]: b for b in read_json("prices/" + safe_name(s), {}).get("bars", [])} for s in stocks}
+    snap = {}
+    have_days = set().union(*[set(h) for h in hist.values()]) if hist else set()
+    start = (max(have_days) if len(have_days) >= 200 else None)
+    start = dt.date.fromisoformat(start) + dt.timedelta(days=1) if start else dt.date.today() - dt.timedelta(days=BACKFILL_DAYS)
+    day, ok_files, fails, stock_files = start, 0, [], 0
+    while day <= dt.date.today():
+        if day.weekday() < 5:
+            stamp = day.strftime("%d%m%Y")
+            try:
+                text = nse_report("/content/indices/ind_close_all_%s.csv" % stamp)
+                if text:
+                    for row in parse_index_snapshot(text, day):
+                        key = slug(row["name"])
+                        hist.setdefault(key, {})[row["bar"][0]] = row["bar"]
+                        snap[key] = row
+                    ok_files += 1
+                    btext = nse_report("/products/content/sec_bhavdata_full_%s.csv" % stamp) if stocks else None
+                    if btext:
+                        bars = parse_bhavcopy(btext, day)
+                        stock_files += 1
+                        for s in stocks:
+                            b = bars.get(s[:-3])
+                            if b:
+                                shist[s][b[0]] = b
+            except Exception as exc:
+                fails.append("%s: %s" % (day, str(exc)[:120]))
+                log("  nse", day, exc)
+                if ok_files == 0 and len(fails) >= 3:
+                    raise RuntimeError("NSE's report archive did not answer this job (it identifies itself as "
+                                       "trader-desk, not as a browser): %s" % fails[-1])
+            time.sleep(0.3)
+        day += dt.timedelta(days=1)
+    log("  NSE index files:", ok_files, "equity files:", stock_files)
+    if ok_files == 0 and not idx_meta["indices"]:
+        raise RuntimeError("no NSE index files read: %s" % "; ".join(fails[-3:]))
+
+    out = {}
+    for key, h in hist.items():
+        bars = [h[k] for k in sorted(h)][-520:]
+        if not bars:
+            continue
+        prev = idx_meta["indices"].get(key, {})
+        name = snap.get(key, {}).get("name") or prev.get("name") or key
+        fname = key + ".json"
+        write_json("indices/" + fname, {"name": name, "source": "NSE daily index snapshot (ind_close_all)", "bars": bars})
+        s = snap.get(key) or {}
+        chg = s.get("pct") if s else (ret(bars, 1) if len(bars) > 1 else None)
+        out[key] = {"name": name, "group": group_of(name), "file": fname, "last": bars[-1][0], "close": bars[-1][4],
+                    "chg": chg if chg is not None else ret(bars, 1),
+                    "r1w": ret(bars, 5), "r1m": ret(bars, 21), "r3m": ret(bars, 63), "r1y": ret(bars, 250),
+                    "pe": s.get("pe") or prev.get("pe"), "pb": s.get("pb") or prev.get("pb"), "dy": s.get("dy") or prev.get("dy"),
+                    "turnover_cr": s.get("turnover_cr") or prev.get("turnover_cr"), "bars": len(bars)}
+    write_json("indices/index.json", {"updated": NOW, "source": "NSE daily index snapshot (ind_close_all), nseindia.com", "indices": out})
+
+    pindex = read_json("prices/index.json", {"tickers": {}})
+    pindex["tickers"] = {k: v for k, v in pindex["tickers"].items() if k.endswith(".NS") or k.endswith(".BO")}
+    nstock = 0
+    for s in stocks:
+        bars = [shist[s][k] for k in sorted(shist[s])][-520:]
+        if len(bars) >= 60:
+            save_prices(pindex, s, bars, "NSE daily bhavcopy (nseindia.com)", "INR")
+            nstock += 1
+    pindex["updated"] = NOW
+    write_json("prices/index.json", pindex)
+    return {"index_files": ok_files, "indices": len(out), "equity_files": stock_files, "stocks": nstock, "recent_failures": fails[-5:]}
+
+
+def section_prices_twelve():
+    """Fallback for watchlist stocks the NSE files did not cover, using the repo's Twelve Data key."""
+    key = os.environ.get("TWELVE_DATA_KEY", "").strip()
+    wl = read_json("watchlist.json", {})
+    pindex = read_json("prices/index.json", {"tickers": {}})
+    missing = [s for s in (wl.get("india") or []) if s not in pindex["tickers"]
+               or pindex["tickers"][s].get("last", "") < (dt.date.today() - dt.timedelta(days=7)).isoformat()]
+    if not missing:
+        return {"skipped": "NSE files covered every watchlist stock"}
+    if not key:
+        raise RuntimeError("%d watchlist stocks have no recent prices and the TWELVE_DATA_KEY secret is not set." % len(missing))
+    ok, failed = 0, {}
+    for s in missing:
+        try:
+            bars = twelve_daily(s, key)
+            if len(bars) < 60:
+                raise ValueError("only %d bars" % len(bars))
+            save_prices(pindex, s, bars, "Twelve Data", "INR")
+            ok += 1
+        except Exception as exc:
+            failed[s] = str(exc)[:160]
+            if re.search(r"plan|upgrade|available starting|run out of API credits", str(exc), re.I):
+                failed["(rest)"] = "stopped: " + str(exc)[:160]
+                break
+        time.sleep(8.5)
+    pindex["updated"] = NOW
+    write_json("prices/index.json", pindex)
+    if not ok:
+        raise RuntimeError("Twelve Data returned no Indian prices: %s" % json.dumps(failed)[:400])
+    return {"ok": ok, "failed": failed}
+
+
+SECTIONS = {"nse_daily": section_nse_daily, "prices_twelve": section_prices_twelve,
             "india_deals": section_india_deals, "india_fiidii": section_india_fiidii}
 
 
 def main(argv):
     want = argv or list(SECTIONS)
-    status = read_json("status.json", {})
+    status = {k: v for k, v in read_json("status.json", {}).items() if k in SECTIONS}
     for name in want:
         log("==", name)
         t0 = time.time()

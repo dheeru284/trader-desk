@@ -5,8 +5,8 @@ on:
     branches: [main]
     paths-ignore: ["README.md"]
   schedule:
-    # Weekdays after the US close (India closed hours earlier).
-    - cron: "40 21 * * 1-5"
+    # Weekdays 19:10 IST, after NSE publishes its end-of-day reports.
+    - cron: "40 13 * * 1-5"
   workflow_dispatch:
 
 permissions:
@@ -30,10 +30,8 @@ jobs:
       - name: Fetch market data
         if: github.event_name != 'push'
         env:
-          # SEC asks every client to identify itself with a name and email.
-          # Set the repository variable SEC_USER_AGENT to "Your Name you@example.com".
-          SEC_USER_AGENT: ${{ vars.SEC_USER_AGENT }}
-          # Your free Twelve Data key, as a repository secret, for the daily watchlist prices.
+          # Optional: your free Twelve Data key, as a repository secret, used only for
+          # watchlist stocks NSE's daily files did not cover.
           TWELVE_DATA_KEY: ${{ secrets.TWELVE_DATA_KEY }}
         run: python3 scripts/fetch_data.py
 
