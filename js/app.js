@@ -237,7 +237,7 @@
     const optLabel = opt ? x.symbol + ' ' + f2(x.strike) + ' ' + x.instrument.toUpperCase() + ' @ ' + f2(x.premium) : '';
     const html = [];
     if (x.source === 'demo') html.push('<div class="banner">Demo mode: these prices are SYNTHETIC, generated from the ticker name. They are not ' + esc(x.symbol) + '\'s real prices. Add a free data key in Settings for real data.</div>');
-    if (x.source === 'repo' && state.repoMeta) html.push('<div class="banner" style="background:var(--raised);color:var(--muted);border-color:var(--line)">Daily NSE data: last bar ' + esc(state.repoMeta.last) + ', from ' + esc(state.repoMeta.source) + '. Updated each weekday evening after NSE publishes its reports; not intraday.</div>');
+    if (x.source === 'repo' && state.repoMeta) html.push('<div class="banner" style="background:var(--raised);color:var(--muted);border-color:var(--line)">Daily NSE data: last bar ' + esc(state.repoMeta.last) + ', from ' + esc(state.repoMeta.source) + '. Updated each weekday evening; not intraday.</div>');
     if (x.source === 'alpha' && x.sym.market === 'NSE') html.push('<div class="banner">Alpha Vantage lists Indian stocks on BSE only, so these are ' + esc(x.sym.base) + '\'s BSE prices. They track NSE closely but not exactly.</div>');
     if (x.bars.length < 200) html.push('<div class="banner">Only ' + x.bars.length + ' bars loaded: the 200-day average and 52-week stats are partial.</div>');
     if (x.fired.length) html.push('<div class="banner">Alerts triggered: ' + x.fired.map(f => esc(A.ALERT_TYPES[f.alert.type] + ' ' + f.alert.value + ' (' + f.detail + ')')).join('; ') + '</div>');

@@ -4,22 +4,21 @@
 Runs on GitHub Actions and writes JSON the static site reads from its own
 origin:
 
-    data/indices/index.json     every NSE index: latest close, change, returns, P/E, P/B, yield
-    data/indices/<slug>.json    daily history per index (~14 months, grows daily)
+    data/indices/index.json     every NSE index: latest close, change and 1D-1Y returns
+    data/indices/<slug>.json    ~2 years of daily history per index
     data/prices/index.json      which watchlist stocks have daily bars
     data/prices/<file>.json     daily OHLCV per watchlist stock
     data/flows/in_deals.json    NSE bulk and block deals, last 30 trading days
     data/flows/in_fiidii.json   FII/FPI and DII net cash-market flows, daily
     data/status.json            what worked and what failed on the last run
 
-Sources: NSE's published daily report files (index snapshot ind_close_all and
-the equity bhavcopy), requested with a user agent that names this project.
-If NSE does not serve those to an automated client, the run says so, and
-watchlist stocks fall back to Twelve Data when the TWELVE_DATA_KEY secret is
-set. Every section is independent; a failure keeps the previous files.
+Sources: Angel One SmartAPI (your own account, via repository secrets) for
+daily candles of every NSE index and the watchlist stocks; Twelve Data as an
+optional fallback for stocks; NSE's bulk/block deal and FII/DII reports for
+Big Money. Every section is independent; a failure keeps the previous files.
 
     python3 scripts/fetch_data.py                   # everything
-    python3 scripts/fetch_data.py nse_daily india_deals
+    python3 scripts/fetch_data.py angel india_deals
 """
 
 import csv
@@ -41,9 +40,7 @@ DATA = os.path.join(ROOT, "data")
 BROWSER_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/126.0 Safari/537.36")
 HONEST_UA = "trader-desk/1.0 (+https://github.com/dheeru284/trader-desk)"
-ARCHIVE = "https://nsearchives.nseindia.com"
 NOW = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
-BACKFILL_DAYS = 430
 
 
 def log(*a):
@@ -222,72 +219,70 @@ def section_india_fiidii():
     return {"days": len(keep)}
 
 
-# ------------------------------------------------------------------ NSE daily files
+# ------------------------------------------------------------------ Angel One SmartAPI
 
-def nse_report(path, timeout=60):
-    """One of NSE's published daily report files. None when there is no file for that day."""
-    try:
-        return http_get(ARCHIVE + path, {"User-Agent": HONEST_UA}, timeout=timeout).decode("utf-8", "replace")
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return None
-        raise
+ANGEL_ROOT = "https://apiconnect.angelone.in"
+SCRIP_MASTER = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+HISTORY_DAYS = 760  # ~2 years of trading days; ONE_DAY candles allow far more per request
 
 
-def parse_day(s):
-    s = s.strip()
-    for fmt in ("%d-%m-%Y", "%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+def totp_now(secret_b32, step=30, digits=6):
+    """RFC 6238 TOTP (the code an authenticator app shows), from the base32 secret."""
+    import base64, hashlib, hmac, struct
+    key = base64.b32decode(secret_b32.replace(" ", "").upper() + "=" * (-len(secret_b32.replace(" ", "")) % 8))
+    mac = hmac.new(key, struct.pack(">Q", int(time.time()) // step), hashlib.sha1).digest()
+    o = mac[-1] & 0x0F
+    return str((struct.unpack(">I", mac[o:o + 4])[0] & 0x7FFFFFFF) % 10 ** digits).zfill(digits)
+
+
+class Angel(object):
+    """The two SmartAPI calls this job needs, with the headers Angel One's official client sends."""
+
+    def __init__(self, api_key):
+        self.api_key, self.jwt = api_key, None
+
+    def _post(self, route, payload):
+        h = {"Content-Type": "application/json", "Accept": "application/json", "X-UserType": "USER",
+             "X-SourceID": "WEB", "X-ClientLocalIP": "127.0.0.1", "X-ClientPublicIP": "127.0.0.1",
+             "X-MACAddress": "00:00:00:00:00:00", "X-PrivateKey": self.api_key, "User-Agent": HONEST_UA}
+        if self.jwt:
+            h["Authorization"] = "Bearer " + self.jwt
+        req = urllib.request.Request(ANGEL_ROOT + route, data=json.dumps(payload).encode(), headers=h, method="POST")
         try:
-            return dt.datetime.strptime(s, fmt).date()
-        except ValueError:
-            pass
-    return None
+            with urllib.request.urlopen(req, timeout=30) as r:
+                j = json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace")[:200]
+            raise RuntimeError("Angel One HTTP %s: %s" % (exc.code, body))
+        if not j.get("status"):
+            raise RuntimeError("Angel One: %s (%s)" % (j.get("message") or "error", j.get("errorcode") or j.get("errorCode") or "-"))
+        return j.get("data")
 
+    def login(self, client, mpin, totp_secret):
+        d = self._post("/rest/auth/angelbroking/user/v1/loginByPassword",
+                       {"clientcode": client, "password": mpin, "totp": totp_now(totp_secret)})
+        self.jwt = d["jwtToken"]
 
-def parse_index_snapshot(text, day):
-    """ind_close_all: one row per NSE index for that day."""
-    rows = list(csv.reader(io.StringIO(text)))
-    head = [h.strip().lower() for h in rows[0]]
-
-    def col(*names):
-        for n in names:
-            for i, h in enumerate(head):
-                if h.startswith(n):
-                    return i
-        return -1
-    i = {k: col(*v) for k, v in {
-        "name": ("index name",), "date": ("index date",), "open": ("open",), "high": ("high",), "low": ("low",),
-        "close": ("closing", "close"), "pct": ("change(%)", "change (%)", "% change"), "vol": ("volume",),
-        "turn": ("turnover",), "pe": ("p/e",), "pb": ("p/b",), "dy": ("div",)}.items()}
-    if i["name"] < 0 or i["close"] < 0:
-        raise ValueError("unexpected index snapshot columns: %s" % ", ".join(head))
-    out = []
-    for r in rows[1:]:
-        if len(r) <= i["close"] or not r[i["name"]].strip():
-            continue
-        g = lambda k: num(r[i[k]]) if i[k] >= 0 and i[k] < len(r) and r[i[k]].strip() not in ("-", "") else 0.0
-        c = g("close")
-        if c <= 0:
-            continue
-        o, h, l = g("open") or c, g("high") or c, g("low") or c
-        d = parse_day(r[i["date"]]) if i["date"] >= 0 else None
-        out.append({"name": re.sub(r"\s+", " ", r[i["name"]].strip()), "bar": [(d or day).isoformat(), o, max(h, o, c), min(l, o, c), c, int(g("vol"))],
-                    "pct": g("pct"), "turnover_cr": g("turn"), "pe": g("pe"), "pb": g("pb"), "dy": g("dy")})
-    return out
-
-
-def parse_bhavcopy(text, day):
-    """sec_bhavdata_full: {symbol: bar} for EQ-series stocks."""
-    rows = list(csv.reader(io.StringIO(text)))
-    head = [h.strip().upper() for h in rows[0]]
-    ix = {k: head.index(k) for k in ("SYMBOL", "SERIES", "OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE", "TTL_TRD_QNTY")}
-    out = {}
-    for r in rows[1:]:
-        if len(r) < len(head) or r[ix["SERIES"]].strip() != "EQ":
-            continue
-        out[r[ix["SYMBOL"]].strip()] = [day.isoformat(), num(r[ix["OPEN_PRICE"]]), num(r[ix["HIGH_PRICE"]]),
-                                        num(r[ix["LOW_PRICE"]]), num(r[ix["CLOSE_PRICE"]]), int(num(r[ix["TTL_TRD_QNTY"]]))]
-    return out
+    def daily(self, exchange, token, days=HISTORY_DAYS):
+        end = dt.datetime.now()
+        start = end - dt.timedelta(days=days)
+        for attempt in range(3):
+            try:
+                rows = self._post("/rest/secure/angelbroking/historical/v1/getCandleData", {
+                    "exchange": exchange, "symboltoken": str(token), "interval": "ONE_DAY",
+                    "fromdate": start.strftime("%Y-%m-%d 09:15"), "todate": end.strftime("%Y-%m-%d 15:30")}) or []
+                break
+            except RuntimeError:
+                if attempt == 2:
+                    raise
+                time.sleep(2 + attempt * 3)  # rate limit or a transient error: back off and retry
+        bars = {}
+        for r in rows:
+            day = str(r[0])[:10]
+            o, h, l, c = (float(x) for x in r[1:5])
+            if c > 0:
+                bars[day] = [day, o or c, max(h, o, c), min(l or c, o or c, c), c, int(r[5] or 0)]
+        return [bars[k] for k in sorted(bars)]
 
 
 GROUPS = [
@@ -314,90 +309,81 @@ def ret(bars, n):
     return round((b / a - 1) * 100, 2) if a else None
 
 
-def section_nse_daily():
-    wl = read_json("watchlist.json", {})
-    stocks = [s for s in (wl.get("india") or []) if s.endswith(".NS")]
-    idx_meta = read_json("indices/index.json", {"indices": {}})
-    hist = {}
-    for key, m in idx_meta["indices"].items():
-        hist[key] = {b[0]: b for b in read_json("indices/" + m["file"], {}).get("bars", [])}
-    shist = {s: {b[0]: b for b in read_json("prices/" + safe_name(s), {}).get("bars", [])} for s in stocks}
-    snap = {}
-    have_days = set().union(*[set(h) for h in hist.values()]) if hist else set()
-    start = (max(have_days) if len(have_days) >= 200 else None)
-    start = dt.date.fromisoformat(start) + dt.timedelta(days=1) if start else dt.date.today() - dt.timedelta(days=BACKFILL_DAYS)
-    day, ok_files, fails, stock_files = start, 0, [], 0
-    while day <= dt.date.today():
-        if day.weekday() < 5:
-            stamp = day.strftime("%d%m%Y")
-            try:
-                text = nse_report("/content/indices/ind_close_all_%s.csv" % stamp)
-                if text:
-                    for row in parse_index_snapshot(text, day):
-                        key = slug(row["name"])
-                        hist.setdefault(key, {})[row["bar"][0]] = row["bar"]
-                        snap[key] = row
-                    ok_files += 1
-                    btext = nse_report("/products/content/sec_bhavdata_full_%s.csv" % stamp) if stocks else None
-                    if btext:
-                        bars = parse_bhavcopy(btext, day)
-                        stock_files += 1
-                        for s in stocks:
-                            b = bars.get(s[:-3])
-                            if b:
-                                shist[s][b[0]] = b
-            except Exception as exc:
-                fails.append("%s: %s" % (day, str(exc)[:120]))
-                log("  nse", day, exc)
-                if ok_files == 0 and len(fails) >= 3:
-                    raise RuntimeError("NSE's report archive did not answer this job (it identifies itself as "
-                                       "trader-desk, not as a browser): %s" % fails[-1])
-            time.sleep(0.3)
-        day += dt.timedelta(days=1)
-    log("  NSE index files:", ok_files, "equity files:", stock_files)
-    if ok_files == 0 and not idx_meta["indices"]:
-        raise RuntimeError("no NSE index files read: %s" % "; ".join(fails[-3:]))
+def section_angel():
+    env = {k: os.environ.get(k, "").strip() for k in ("ANGEL_API_KEY", "ANGEL_CLIENT_CODE", "ANGEL_MPIN", "ANGEL_TOTP_SECRET")}
+    missing = [k for k, v in env.items() if not v]
+    if missing:
+        raise RuntimeError("Add these repository secrets for Angel One SmartAPI: %s "
+                           "(Settings > Secrets and variables > Actions > New repository secret)." % ", ".join(missing))
+    api = Angel(env["ANGEL_API_KEY"])
+    api.login(env["ANGEL_CLIENT_CODE"], env["ANGEL_MPIN"], env["ANGEL_TOTP_SECRET"])
+    log("  logged in to SmartAPI")
 
-    out = {}
-    for key, h in hist.items():
-        bars = [h[k] for k in sorted(h)][-520:]
-        if not bars:
+    master = json.loads(http_get(SCRIP_MASTER, {"User-Agent": HONEST_UA}, timeout=120).decode("utf-8"))
+    indices = [m for m in master if m.get("exch_seg") == "NSE" and m.get("instrumenttype") == "AMXIDX"]
+    eq = {m["symbol"][:-3]: m for m in master if m.get("exch_seg") == "NSE" and str(m.get("symbol", "")).endswith("-EQ")}
+    log("  scrip master: %d NSE indices, %d NSE equities" % (len(indices), len(eq)))
+    del master
+
+    out, failed = {}, {}
+    for m in indices:
+        # The instrument list keeps the readable index name ("Nifty Bank") in "symbol" and a
+        # short code ("BANKNIFTY") in "name"; use whichever is the longer, readable one.
+        cands = [str(m.get("symbol") or "").strip(), str(m.get("name") or "").strip()]
+        name = re.sub(r"\s+", " ", max(cands, key=lambda x: (" " in x, len(x))))
+        key = slug(name)
+        if not key or key in out:
             continue
-        prev = idx_meta["indices"].get(key, {})
-        name = snap.get(key, {}).get("name") or prev.get("name") or key
-        fname = key + ".json"
-        write_json("indices/" + fname, {"name": name, "source": "NSE daily index snapshot (ind_close_all)", "bars": bars})
-        s = snap.get(key) or {}
-        chg = s.get("pct") if s else (ret(bars, 1) if len(bars) > 1 else None)
-        out[key] = {"name": name, "group": group_of(name), "file": fname, "last": bars[-1][0], "close": bars[-1][4],
-                    "chg": chg if chg is not None else ret(bars, 1),
-                    "r1w": ret(bars, 5), "r1m": ret(bars, 21), "r3m": ret(bars, 63), "r1y": ret(bars, 250),
-                    "pe": s.get("pe") or prev.get("pe"), "pb": s.get("pb") or prev.get("pb"), "dy": s.get("dy") or prev.get("dy"),
-                    "turnover_cr": s.get("turnover_cr") or prev.get("turnover_cr"), "bars": len(bars)}
-    write_json("indices/index.json", {"updated": NOW, "source": "NSE daily index snapshot (ind_close_all), nseindia.com", "indices": out})
+        try:
+            bars = api.daily("NSE", m["token"])
+            if len(bars) < 2:
+                raise ValueError("only %d bars" % len(bars))
+            fname = key + ".json"
+            write_json("indices/" + fname, {"name": name, "token": m["token"], "source": "Angel One SmartAPI", "bars": bars[-520:]})
+            out[key] = {"name": name, "group": group_of(name), "file": fname, "last": bars[-1][0], "close": bars[-1][4],
+                        "chg": ret(bars, 1), "r1w": ret(bars, 5), "r1m": ret(bars, 21), "r3m": ret(bars, 63), "r1y": ret(bars, 250),
+                        "pe": None, "pb": None, "dy": None, "bars": len(bars)}
+        except Exception as exc:
+            failed[name] = str(exc)[:160]
+            if "token" in str(exc).lower() and "invalid" in str(exc).lower():
+                raise
+        time.sleep(0.4)  # SmartAPI historical data: a few requests a second
+    if out:
+        write_json("indices/index.json", {"updated": NOW, "source": "Angel One SmartAPI daily candles (NSE)", "indices": out})
 
+    wl = read_json("watchlist.json", {})
     pindex = read_json("prices/index.json", {"tickers": {}})
-    pindex["tickers"] = {k: v for k, v in pindex["tickers"].items() if k.endswith(".NS") or k.endswith(".BO")}
     nstock = 0
-    for s in stocks:
-        bars = [shist[s][k] for k in sorted(shist[s])][-520:]
-        if len(bars) >= 60:
-            save_prices(pindex, s, bars, "NSE daily bhavcopy (nseindia.com)", "INR")
+    for s in [x for x in (wl.get("india") or []) if x.endswith(".NS")]:
+        m = eq.get(s[:-3])
+        if not m:
+            failed[s] = "not an NSE -EQ symbol in Angel One's instrument list"
+            continue
+        try:
+            bars = api.daily("NSE", m["token"])
+            if len(bars) < 60:
+                raise ValueError("only %d bars" % len(bars))
+            save_prices(pindex, s, bars[-520:], "Angel One SmartAPI", "INR")
             nstock += 1
+        except Exception as exc:
+            failed[s] = str(exc)[:160]
+        time.sleep(0.4)
     pindex["updated"] = NOW
     write_json("prices/index.json", pindex)
-    return {"index_files": ok_files, "indices": len(out), "equity_files": stock_files, "stocks": nstock, "recent_failures": fails[-5:]}
+    if not out and not nstock:
+        raise RuntimeError("SmartAPI returned no data: %s" % json.dumps(failed)[:400])
+    return {"indices": len(out), "stocks": nstock, "failed_count": len(failed), "failed": dict(list(failed.items())[:12])}
 
 
 def section_prices_twelve():
-    """Fallback for watchlist stocks the NSE files did not cover, using the repo's Twelve Data key."""
+    """Fallback for watchlist stocks SmartAPI did not cover, using the repo's Twelve Data key."""
     key = os.environ.get("TWELVE_DATA_KEY", "").strip()
     wl = read_json("watchlist.json", {})
     pindex = read_json("prices/index.json", {"tickers": {}})
     missing = [s for s in (wl.get("india") or []) if s not in pindex["tickers"]
                or pindex["tickers"][s].get("last", "") < (dt.date.today() - dt.timedelta(days=7)).isoformat()]
     if not missing:
-        return {"skipped": "NSE files covered every watchlist stock"}
+        return {"skipped": "every watchlist stock already has recent prices"}
     if not key:
         raise RuntimeError("%d watchlist stocks have no recent prices and the TWELVE_DATA_KEY secret is not set." % len(missing))
     ok, failed = 0, {}
@@ -421,7 +407,7 @@ def section_prices_twelve():
     return {"ok": ok, "failed": failed}
 
 
-SECTIONS = {"nse_daily": section_nse_daily, "prices_twelve": section_prices_twelve,
+SECTIONS = {"angel": section_angel, "prices_twelve": section_prices_twelve,
             "india_deals": section_india_deals, "india_fiidii": section_india_fiidii}
 
 

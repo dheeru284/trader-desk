@@ -28,8 +28,8 @@
     const out = $('#idxOut');
     let status = {};
     try { status = await (await fetch('data/status.json', { cache: 'no-cache' })).json(); } catch (e) { /* none yet */ }
-    const st = status.nse_daily;
-    const banner = !st ? '<div class="banner">No index data yet: the scheduled job has not run. It runs every weekday evening after NSE publishes its reports, or on demand from the repo\'s Actions tab.</div>'
+    const st = status.angel;
+    const banner = !st ? '<div class="banner">No index data yet: the scheduled job has not run. It runs every weekday evening, or on demand from the repo\'s Actions tab, once the Angel One secrets are added (see README).</div>'
       : !st.ok ? '<div class="banner">The last update failed (' + esc(st.error || 'unknown error') + ')' + (st.last_ok ? '; showing data from ' + esc(st.last_ok.slice(0, 10)) : '') + '.</div>' : '';
     try {
       data = data || await TD.repoIndices();
@@ -54,6 +54,7 @@
     }).join('');
 
     const col = (key, label, numeric = true) => '<th class="' + (numeric ? 'num' : '') + '"><button class="sortbtn" data-sort="' + key + '">' + label + (ui.sort === key ? (ui.dir < 0 ? ' ↓' : ' ↑') : '') + '</button></th>';
+    const hasVal = all.some(v => v.pe || v.pb || v.dy);
     const rows = list.slice().sort((a, b) => {
       const x = a[ui.sort], y = b[ui.sort];
       if (typeof x === 'string' || typeof y === 'string') return ui.dir * String(x || '').localeCompare(String(y || ''));
@@ -66,11 +67,11 @@
       + '<p>Breadth: <b class="up">▲ ' + up + ' up</b> · <b class="down">▼ ' + down + ' down</b> · ' + (today.length - up - down) + ' flat, of ' + today.length + ' indices. Colour shows the <b>' + PERIODS[ui.period] + '</b> return; stronger tint = bigger move (full tint at ±' + SCALE[ui.period] + '%).</p>'
       + (grid || '<p class="muted">No index matches.</p>')
       + '<p class="muted">India VIX rises when expected volatility rises, so "up" there means more fear, not gains. Fixed-income indices move in small steps; read their returns, not their tint.</p></div>'
-      + '<div class="panel"><h2>Table view · returns and valuation</h2><div class="scroll"><table><thead><tr>' + col('name', 'Index', false) + col('group', 'Group', false) + col('close', 'Close')
-      + col('chg', '1D') + col('r1w', '1W') + col('r1m', '1M') + col('r3m', '3M') + col('r1y', '1Y') + col('pe', 'P/E') + col('pb', 'P/B') + col('dy', 'Div yield') + '</tr></thead><tbody>'
+      + '<div class="panel"><h2>Table view · returns' + (hasVal ? ' and valuation' : '') + '</h2><div class="scroll"><table><thead><tr>' + col('name', 'Index', false) + col('group', 'Group', false) + col('close', 'Close')
+      + col('chg', '1D') + col('r1w', '1W') + col('r1m', '1M') + col('r3m', '3M') + col('r1y', '1Y') + (hasVal ? col('pe', 'P/E') + col('pb', 'P/B') + col('dy', 'Div yield') : '') + '</tr></thead><tbody>'
       + rows.map(v => '<tr><td><button class="linkbtn" data-idx="' + esc(v.NAME) + '">' + esc(v.name) + '</button></td><td>' + esc(v.group) + '</td><td class="num">' + num(v.close) + '</td>'
         + ['chg', 'r1w', 'r1m', 'r3m', 'r1y'].map(k => '<td class="num ' + cls(v[k]) + '">' + pct(v[k]) + '</td>').join('')
-        + '<td class="num">' + num(v.pe) + '</td><td class="num">' + num(v.pb) + '</td><td class="num">' + (v.dy ? num(v.dy) + '%' : '–') + '</td></tr>').join('')
+        + (hasVal ? '<td class="num">' + num(v.pe) + '</td><td class="num">' + num(v.pb) + '</td><td class="num">' + (v.dy ? num(v.dy) + '%' : '–') + '</td>' : '') + '</tr>').join('')
       + '</tbody></table></div><p class="muted">Source: ' + esc(data.source || 'NSE') + '. Returns are close-to-close over 5, 21, 63 and 250 trading days and need that much history; "–" means not enough yet. Updated ' + esc((data.updated || '').slice(0, 10)) + '.</p>'
       + '<p class="disclaimer">This is not financial advice. Trade at your own risk.</p></div>';
 

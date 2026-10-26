@@ -187,7 +187,7 @@
     const warnings = [];
     let qty, maxLoss, posValue, unit;
     if (o.instrument === 'stock') {
-      unit = 'shares';
+      unit = o.isIndex ? 'index units' : 'shares';
       const per = Math.abs(o.entry - o.stop);
       qty = Math.floor(riskDollars / per);
       const cap = o.account * o.maxPosPct / 100;

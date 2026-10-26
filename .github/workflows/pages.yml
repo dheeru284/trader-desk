@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths-ignore: ["README.md"]
   schedule:
-    # Weekdays 19:10 IST, after NSE publishes its end-of-day reports.
+    # Weekdays 19:10 IST, after the close and NSE's end-of-day reports.
     - cron: "40 13 * * 1-5"
   workflow_dispatch:
 
@@ -30,8 +30,13 @@ jobs:
       - name: Fetch market data
         if: github.event_name != 'push'
         env:
-          # Optional: your free Twelve Data key, as a repository secret, used only for
-          # watchlist stocks NSE's daily files did not cover.
+          # Angel One SmartAPI (your own account): daily candles for every NSE index and
+          # the watchlist stocks. Add these as repository secrets; they are never logged.
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_MPIN: ${{ secrets.ANGEL_MPIN }}
+          ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
+          # Optional fallback for watchlist stocks SmartAPI did not cover.
           TWELVE_DATA_KEY: ${{ secrets.TWELVE_DATA_KEY }}
         run: python3 scripts/fetch_data.py
 
