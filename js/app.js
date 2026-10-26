@@ -116,6 +116,7 @@
     const idx = await repoIndex();
     const id = sym.india ? sym.id : sym.base.replace('.', '-');
     const hit = idx.tickers[id];
+    if (!Object.keys(idx.tickers).length) throw new Error('The daily watchlist has no prices yet. Save your Twelve Data key as the repository secret TWELVE_DATA_KEY (see README), or pick Twelve Data as the source.');
     if (!hit) throw new Error(sym.id + ' is not in the daily watchlist (' + Object.keys(idx.tickers).length + ' tickers). Add it to data/watchlist.json on GitHub, or use Twelve Data or a CSV.');
     const r = await fetch('data/prices/' + encodeURIComponent(hit.file), { cache: 'no-cache' });
     if (!r.ok) throw new Error('Could not read ' + hit.file + ' (HTTP ' + r.status + ').');

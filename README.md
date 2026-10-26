@@ -11,6 +11,7 @@ data. It cannot see the future and cannot place orders.
 
 | # | Agent | Where | What it does |
 |---|-------|-------|--------------|
+| 0 | Big Money | Big Money | Money-flow Sankey of fund 13F moves and NSE bulk/block deals, FII/DII daily net flows |
 | 1 | Chart Scanner | Desk | SMA 20/50/200, RSI 14, MACD 12/26/9, Bollinger 20/2, ATR 14, volume z-score anomalies, swing-pivot support/resistance, 52-week range, realised vol |
 | 2 | News Monitor | Desk | Finnhub company news (14 days), flags high-impact keywords (earnings, guidance, downgrade, FDA, lawsuit, M&A…) |
 | 3 | Entry Timer | Desk | Confluence checklist, pullback zone, breakout trigger |
@@ -33,6 +34,49 @@ only to their provider.
 - **Finnhub**: news.
 - **CSV upload**: any `Date,Open,High,Low,Close[,Adj Close],Volume` export.
 - **Demo**: synthetic prices seeded from the ticker name, clearly bannered. Not real.
+
+## Big Money (money-flow page)
+
+A Sankey diagram of who moved money into and out of which stocks: sellers on
+the left, the stock in the middle, buyers on the right; band width is money.
+
+| View | Source | Freshness |
+|---|---|---|
+| US funds · 13F | SEC EDGAR 13F-HR filings of 15 well-known funds (Berkshire, Bridgewater, Pershing Square, Renaissance, Soros, Tiger Global…): change in shares between their two latest quarters, valued at the quarter-end price | Quarterly, filed up to 45 days after the quarter: what they **did**, not what they are doing |
+| India · bulk & block deals | NSE bulk and block deal reports | Daily, last 30 trading days. Same-day round trips by prop/arbitrage desks are netted and hidden by default (toggle to show) |
+| India · FII / DII | NSE provisional FII/FPI and DII cash-market activity | Daily; history builds up one day per run |
+
+Click a stock to analyse it on the Desk. A table view lists every flow.
+
+Disclosed trades are not recommendations: big players are often hedged
+elsewhere, wrong, or already out by the time a trade is public.
+
+### Data job and one-time setup
+
+`.github/workflows/pages.yml` runs `scripts/fetch_data.py` every weekday after
+the US close (and on demand from the Actions tab), commits JSON under `data/`,
+and redeploys. Each section fails independently and the page shows a banner
+with the reason. Two settings only you can add, under the repository's
+**Settings → Secrets and variables → Actions**:
+
+- **Variable `SEC_USER_AGENT`** = `Your Name you@example.com`. SEC requires a
+  real contact on every request and refuses anonymous ones (403).
+- **Secret `TWELVE_DATA_KEY`** = your free Twelve Data key. The job uses it to
+  download daily prices for `data/watchlist.json`, so the Desk's "Daily
+  watchlist" source works for anyone without a key. The free plan allows 8
+  requests a minute, so ~70 tickers take about 10 minutes.
+
+Not used, by choice: Yahoo Finance and Stooq refuse automated requests from
+GitHub's servers (429 / challenge page), and NSE's daily price files hang for
+non-browser clients. The job does not disguise itself to get around those.
+**Caveat:** the NSE deal and FII/DII downloads present a browser user agent,
+which is how NSE serves them today; NSE can block that at any time and its
+terms may not permit automated access. Remove the `india_deals` and
+`india_fiidii` sections from `scripts/fetch_data.py` if that matters to you.
+
+The 13F reader is vendored from
+[Jakeschincariol/trader-skill](https://github.com/Jakeschincariol/trader-skill)
+(MIT); see `scripts/vendor/NOTICE.md`.
 
 ## US and Indian markets
 

@@ -203,7 +203,7 @@
       const t = el('text', { x: colX[1] + nodeW + 6, y: pos.y + pos.h / 2 + 4 }, g);
       fit(t, s.ticker || s.label, W / 2 - colX[0] - 40);
       const t2 = el('text', { x: colX[1] - 6, y: pos.y + pos.h / 2 + 4, 'text-anchor': 'end', class: 'sub' }, g);
-      t2.textContent = (net >= 0 ? '▲ ' : '▼ ') + fmtFlow(Math.abs(net), ccy);
+      t2.textContent = Math.abs(net) < 0.005 * (s.buy + s.sell) ? '= even' : (net > 0 ? '▲ ' : '▼ ') + fmtFlow(Math.abs(net), ccy);
       const html = '<b>' + esc(s.label) + (s.ticker ? ' (' + esc(s.ticker) + ')' : '') + '</b>' + [s.buy ? '▲ bought ' + fmtFlow(s.buy, ccy) : '', s.sell ? '▼ sold ' + fmtFlow(s.sell, ccy) : ''].filter(Boolean).join('<br>')
         + '<br>Net ' + (net >= 0 ? '▲ ' : '▼ ') + fmtFlow(Math.abs(net), ccy) + (s.ticker && onStock ? '<br><span class="muted">Click to analyse on the Desk</span>' : '');
       g.addEventListener('mouseenter', () => highlight(p => p.dataset.key === s.key));
@@ -250,7 +250,7 @@
   }
 
   // ---------------------------------------------------------------- page
-  const ui = { view: 'us', days: 5, topN: 12, player: '' };
+  const ui = { view: 'us', days: 5, topN: 12, player: '', roundTrips: false };
   let redraw = null;
 
   function flowTable(rows, ccy, onStock) {
@@ -300,14 +300,35 @@
         const d = await load('data/flows/in_deals.json');
         const dates = d.dates.slice(-ui.days);
         const deals = d.deals.filter(x => dates.includes(x.date) && (!ui.player || x.client === ui.player));
-        const rows = deals.map(x => ({ player: x.client, stock: x.name || x.symbol, ticker: x.symbol, key: x.symbol, side: x.side, value: x.value,
-          action: (x.side === 'buy' ? 'Bought' : 'Sold') + ' · ' + x.type, date: x.date }));
+        // Prop and arbitrage desks buy and sell the same stock the same day. Net each
+        // client's day in a stock; unless asked, drop near-even round trips (< 10% net).
+        const groups = new Map();
+        for (const x of deals) {
+          const k = x.date + '|' + x.client + '|' + x.symbol;
+          const g = groups.get(k) || { date: x.date, client: x.client, symbol: x.symbol, name: x.name, buy: 0, sell: 0, types: new Set() };
+          g[x.side] += x.value; g.types.add(x.type); groups.set(k, g);
+        }
+        let hidden = 0, hiddenValue = 0;
+        const rows = [];
+        for (const g of groups.values()) {
+          const types = [...g.types].join(' + ');
+          const both = g.buy > 0 && g.sell > 0;
+          if (ui.roundTrips || !both) {
+            for (const sd of ['buy', 'sell']) if (g[sd] > 0) rows.push({ player: g.client, stock: g.name || g.symbol, ticker: g.symbol, key: g.symbol, side: sd, value: g[sd], action: (sd === 'buy' ? 'Bought' : 'Sold') + ' · ' + types, date: g.date });
+            continue;
+          }
+          const net = g.buy - g.sell;
+          if (Math.abs(net) < 0.1 * (g.buy + g.sell)) { hidden++; hiddenValue += g.buy + g.sell; continue; }
+          rows.push({ player: g.client, stock: g.name || g.symbol, ticker: g.symbol, key: g.symbol, side: net > 0 ? 'buy' : 'sell', value: Math.abs(net), action: (net > 0 ? 'Net bought' : 'Net sold') + ' · ' + types, date: g.date });
+        }
         const buy = rows.filter(r => r.side === 'buy').reduce((s, r) => s + r.value, 0), sell = rows.filter(r => r.side === 'sell').reduce((s, r) => s + r.value, 0);
         out.innerHTML = statusNote('india_deals')
           + '<div class="panel"><h2>India · NSE bulk &amp; block deals · ' + (dates.length ? esc(dates[0]) + ' → ' + esc(dates[dates.length - 1]) : 'no days yet') + '</h2>'
           + '<div class="tiles"><div class="tile"><b>▲ Bought</b><span class="up">' + fmtFlow(buy, '₹') + '</span><small>' + rows.filter(r => r.side === 'buy').length + ' deals</small></div>'
           + '<div class="tile"><b>▼ Sold</b><span class="down">' + fmtFlow(sell, '₹') + '</span><small>' + rows.filter(r => r.side === 'sell').length + ' deals</small></div>'
           + '<div class="tile"><b>Trading days</b><span>' + dates.length + '</span><small>history kept: ' + d.dates.length + ' days · updated ' + ago(d.updated) + '</small></div></div>'
+          + '<label class="row" style="flex-direction:row;gap:8px;margin-bottom:10px;color:var(--fg)"><input type="checkbox" id="rtToggle" style="width:auto;min-height:0"' + (ui.roundTrips ? ' checked' : '') + '> Show same-day round trips (prop / arbitrage desks buying and selling the same stock)</label>'
+          + (!ui.roundTrips && hidden ? '<p class="muted">' + hidden + ' same-day round trip(s) worth ' + fmtFlow(hiddenValue, '₹') + ' gross are hidden: those clients ended the day roughly flat, so no money stayed in the stock.</p>' : '')
           + '<div class="sankey-wrap" id="sk"></div><p class="muted" id="skNote"></p>'
           + '<p class="muted">' + esc(d.method) + ' A buyer and seller in the same stock are often the two sides of one negotiated trade.</p>' + DISC + '</div>'
           + '<div class="panel"><h2>Every deal (table view)</h2>' + flowTable(rows, '₹', onStock) + '</div>';
@@ -330,6 +351,8 @@
         redraw = () => { dailyBars($('#barsF'), days, 'FII'); dailyBars($('#barsD'), days, 'DII'); };
       }
       redraw();
+      const rt = $('#rtToggle');
+      if (rt) rt.addEventListener('change', () => { ui.roundTrips = rt.checked; render(); });
       document.querySelectorAll('#flowOut [data-open]').forEach(b => b.addEventListener('click', () => onStock(b.dataset.open, ui.view === 'us' ? 'US' : 'NSE')));
     } catch (err) {
       out.innerHTML = statusNote(ui.view === 'us' ? 'flows13f' : ui.view === 'india' ? 'india_deals' : 'india_fiidii')

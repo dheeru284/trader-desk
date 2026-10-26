@@ -80,40 +80,25 @@ def safe_name(symbol):
     return re.sub(r"[^A-Za-z0-9.\-]", "_", symbol) + ".json"
 
 
-def stooq_daily(symbol):
-    """Stooq's public daily CSV download. US tickers are aapl.us (brk-b.us)."""
-    s = symbol.lower() + ".us"
-    start = (dt.date.today() - dt.timedelta(days=760)).strftime("%Y%m%d")
-    text = http_get("https://stooq.com/q/d/l/?s=%s&i=d&d1=%s" % (urllib.request.quote(s), start),
-                    {"User-Agent": "trader-desk/1.0 (github.com/dheeru284/trader-desk)"}, timeout=20).decode("utf-8", "replace")
-    if not text.lower().startswith("date,"):
-        raise ValueError("stooq: " + text.strip()[:100])
-    bars = {}
-    for r in list(csv.reader(io.StringIO(text)))[1:]:
-        if len(r) >= 5 and min(num(x) for x in r[1:5]) > 0:
-            bars[r[0]] = [r[0], num(r[1]), num(r[2]), num(r[3]), num(r[4]), int(num(r[5])) if len(r) > 5 else 0]
-    return [bars[k] for k in sorted(bars)]
-
-
-def nse_bhavcopy(day):
-    """NSE's published end-of-day file for one date: {symbol: bar} for EQ series, or None if no file."""
-    url = "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_%s.csv" % day.strftime("%d%m%Y")
+def twelve_daily(symbol, key):
+    """Twelve Data's official time_series API with the repository's key."""
+    india = symbol.endswith(".NS") or symbol.endswith(".BO")
+    base = symbol.rsplit(".", 1)[0] if india else symbol.replace("-", ".")
+    url = ("https://api.twelvedata.com/time_series?interval=1day&outputsize=520&symbol=%s%s&apikey=%s"
+           % (urllib.request.quote(base), ("&exchange=" + ("NSE" if symbol.endswith(".NS") else "BSE")) if india else "",
+              urllib.request.quote(key)))
     try:
-        text = http_get(url, {"User-Agent": "trader-desk/1.0 (github.com/dheeru284/trader-desk)"}, timeout=20).decode("utf-8", "replace")
+        j = json.loads(http_get(url, {"User-Agent": "trader-desk/1.0 (github.com/dheeru284/trader-desk)"}, timeout=30).decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return None  # holiday or weekend
-        raise
-    rows = list(csv.reader(io.StringIO(text)))
-    head = [h.strip().upper() for h in rows[0]]
-    ix = {k: head.index(k) for k in ("SYMBOL", "SERIES", "OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE", "TTL_TRD_QNTY")}
-    out = {}
-    for r in rows[1:]:
-        if len(r) < len(head) or r[ix["SERIES"]].strip() != "EQ":
-            continue
-        out[r[ix["SYMBOL"]].strip()] = [day.isoformat(), num(r[ix["OPEN_PRICE"]]), num(r[ix["HIGH_PRICE"]]),
-                                        num(r[ix["LOW_PRICE"]]), num(r[ix["CLOSE_PRICE"]]), int(num(r[ix["TTL_TRD_QNTY"]]))]
-    return out
+        j = json.loads(exc.read().decode("utf-8") or "{}")
+    if j.get("status") == "error" or j.get("code", 200) >= 400:
+        raise ValueError(j.get("message") or "error")
+    bars = {}
+    for v in j.get("values") or []:
+        b = [v["datetime"][:10], num(v["open"]), num(v["high"]), num(v["low"]), num(v["close"]), int(num(v.get("volume", 0)))]
+        if min(b[1:5]) > 0:
+            bars[b[0]] = b
+    return [bars[k] for k in sorted(bars)]
 
 
 def save_prices(index, sym, bars, label, ccy):
@@ -123,68 +108,39 @@ def save_prices(index, sym, bars, label, ccy):
 
 
 def section_prices():
+    key = os.environ.get("TWELVE_DATA_KEY", "").strip()
+    if not key:
+        raise RuntimeError("Add your free Twelve Data key as the repository secret TWELVE_DATA_KEY "
+                           "(Settings > Secrets and variables > Actions > New repository secret) to enable the no-key watchlist.")
     wl = read_json("watchlist.json", {})
-    us = wl.get("us") or []
-    india = [s for s in (wl.get("india") or []) if s.endswith(".NS")]
     index = read_json("prices/index.json", {"tickers": {}})
-    ok, failed = {"us": 0, "india": 0}, {}
-
-    for s in us:
+    ok, failed, skip_india = {"us": 0, "india": 0}, {}, None
+    for s in (wl.get("us") or []) + (wl.get("india") or []):
+        india = s.endswith(".NS") or s.endswith(".BO")
+        if india and skip_india:
+            failed[s] = skip_india
+            continue
         try:
-            bars = stooq_daily(s)
+            bars = twelve_daily(s, key)
             if len(bars) < 60:
                 raise ValueError("only %d bars" % len(bars))
-            save_prices(index, s, bars, "Stooq daily data", "USD")
-            ok["us"] += 1
+            save_prices(index, s, bars, "Twelve Data", "INR" if india else "USD")
+            ok["india" if india else "us"] += 1
         except Exception as exc:
-            failed[s] = str(exc)[:200]
-            log("  price fail", s, exc)
-            if ok["us"] == 0 and len(failed) >= 3:
-                failed["(rest of US)"] = "skipped after 3 failures in a row"
+            msg = str(exc)[:200]
+            failed[s] = msg
+            log("  price fail", s, msg)
+            if india and re.search(r"plan|upgrade|available starting|access", msg, re.I):
+                skip_india = "skipped: your Twelve Data plan does not include Indian exchanges (" + msg[:120] + ")"
+            if re.search(r"run out of API credits|daily limit", msg, re.I):
+                failed["(rest)"] = "stopped: Twelve Data daily credit limit reached"
                 break
-        time.sleep(0.5)
-
-    # India: extend each stored series with NSE's daily files, backfilling ~16 months on first run.
-    have = {}
-    for s in india:
-        prev = read_json("prices/" + safe_name(s), {}).get("bars") or []
-        have[s] = {b[0]: b for b in prev}
-    latest = max((max(h) for h in have.values() if h), default=None)
-    need_backfill = any(len(h) < 250 for h in have.values())
-    start = dt.date.today() - dt.timedelta(days=480) if need_backfill or not latest else dt.date.fromisoformat(latest) + dt.timedelta(days=1)
-    day, files, errors = start, 0, 0
-    while day <= dt.date.today() and india:
-        if day.weekday() < 5 and (need_backfill or day.isoformat() not in next(iter(have.values()))):
-            try:
-                rows = nse_bhavcopy(day)
-                if rows:
-                    files += 1
-                    for s in india:
-                        bar = rows.get(s[:-3])
-                        if bar:
-                            have[s][bar[0]] = bar
-            except Exception as exc:
-                errors += 1
-                log("  bhavcopy", day, exc)
-                if files == 0 and errors >= 5:
-                    failed["(India)"] = "NSE daily files unavailable: %s" % exc
-                    break
-            time.sleep(0.25)
-        day += dt.timedelta(days=1)
-    for s in india:
-        bars = [have[s][k] for k in sorted(have[s])][-520:]
-        if len(bars) >= 60:
-            save_prices(index, s, bars, "NSE daily bhavcopy (nseindia.com)", "INR")
-            ok["india"] += 1
-        elif s not in failed:
-            failed[s] = "only %d bars from NSE files (symbol renamed or not EQ series?)" % len(bars)
-    log("  NSE files read:", files)
-
+        time.sleep(8.5)  # free plan: 8 requests a minute
     index["updated"] = NOW
     write_json("prices/index.json", index)
     if not (ok["us"] or ok["india"]):
         raise RuntimeError("no prices fetched: %s" % json.dumps(failed)[:500])
-    return {"ok": ok, "nse_files": files, "failed": failed}
+    return {"ok": ok, "failed": failed}
 
 
 # ------------------------------------------------------------------ US 13F
@@ -334,7 +290,7 @@ def section_india_deals():
     for d in got:
         merged[key(d)] = d
     dates = sorted({d["date"] for d in merged.values()})[-30:]
-    deals = sorted((d for d in merged.values() if d["date"] in dates), key=lambda d: (d["date"], -d["value"]), reverse=True)
+    deals = sorted((d for d in merged.values() if d["date"] in dates), key=lambda d: (d["date"], d["value"]), reverse=True)
     write_json("flows/in_deals.json", {
         "updated": NOW, "source": "NSE bulk and block deal reports (nseindia.com)",
         "dates": dates, "deals": deals, "errors": errors,

@@ -35,6 +35,7 @@
 :root[data-theme="dark"][data-colors="classic"] { --up: #22a55c; --down: #e5534b; --up-ink: #4cc985; --down-ink: #f07f78; }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 var(--sans); }
 a { color: var(--accent); }

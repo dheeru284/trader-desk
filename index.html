@@ -24,7 +24,7 @@
   </nav>
   <div class="tools">
     <button class="ghost" id="colorsBtn" title="Switch up/down colours">Colours: colour-blind safe</button>
-    <button class="ghost" id="themeBtn" title="Switch light / dark">◐ Theme</button>
+    <button class="ghost" id="themeBtn" title="Switch light / dark">Light / dark</button>
   </div>
 </header>
 
@@ -45,8 +45,8 @@
       <datalist id="watchlist"></datalist>
       <label>Data source
         <select name="source">
-          <option value="repo">Daily watchlist (no key · US + India)</option>
           <option value="twelve">Twelve Data (free key)</option>
+          <option value="repo">Daily watchlist (no key needed)</option>
           <option value="alpha">Alpha Vantage (free key, 100 bars)</option>
           <option value="csv">Upload CSV</option>
           <option value="demo">Demo: synthetic prices</option>
@@ -204,7 +204,7 @@
       <li>Alpha Vantage: alphavantage.co/support/#api-key: the free tier gives the last 100 daily bars only (too short for the 200-day average or a 12-month backtest).</li>
       <li>Finnhub: finnhub.io/register: company news on the free tier.</li>
       <li>No key? Export daily OHLCV as CSV from your broker or a charting site and use "Upload CSV".</li>
-      <li><b>No key needed:</b> "Daily watchlist" reads prices a scheduled GitHub Action downloads every weekday for the tickers in <code>data/watchlist.json</code> (about 30 US and 37 Indian stocks). Edit that file on GitHub to change the list.</li>
+      <li><b>No key needed:</b> "Daily watchlist" reads prices a scheduled GitHub Action downloads every weekday for the tickers in <code>data/watchlist.json</code>. It needs your Twelve Data key saved once as the repository secret <code>TWELVE_DATA_KEY</code>; after that anyone opening the site gets prices without a key.</li>
       <li><b>India:</b> Twelve Data is asked for NSE/BSE directly, but its free plan may not include Indian exchanges; the app shows Twelve Data's own message if not. Alpha Vantage's free key covers BSE (last 100 days). For full history, download a CSV from nseindia.com (Get Quote → Historical Data) or bseindia.com, or export from your broker (e.g. Zerodha Console), then use "Upload CSV". Free news covers US companies only.</li>
     </ul>
     <div id="keyMsg" class="muted"></div>

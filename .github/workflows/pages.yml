@@ -31,8 +31,10 @@ jobs:
         if: github.event_name != 'push'
         env:
           # SEC asks every client to identify itself with a name and email.
-          # Set a repository variable SEC_USER_AGENT ("Your Name you@example.com") to use your own.
-          SEC_USER_AGENT: ${{ vars.SEC_USER_AGENT || 'Trader Desk dheeru284 (github.com/dheeru284/trader-desk) dheeru284@users.noreply.github.com' }}
+          # Set the repository variable SEC_USER_AGENT to "Your Name you@example.com".
+          SEC_USER_AGENT: ${{ vars.SEC_USER_AGENT }}
+          # Your free Twelve Data key, as a repository secret, for the daily watchlist prices.
+          TWELVE_DATA_KEY: ${{ secrets.TWELVE_DATA_KEY }}
         run: python3 scripts/fetch_data.py
 
       - name: Commit data
