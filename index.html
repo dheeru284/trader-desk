@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trader Desk</title>
+<title>Trader Desk India</title>
 <meta name="description" content="Eleven-agent trade research desk: chart scan, news, entry/exit planning, position sizing, Monte Carlo, backtests, portfolio, journal and alerts. Runs entirely in your browser.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,9 +12,10 @@
 </head>
 <body>
 <header>
-  <h1>Trader Desk <span>· research &amp; simulation</span></h1>
+  <h1>Trader Desk <span>· NSE &amp; BSE research</span></h1>
   <nav id="nav">
     <button data-tab="desk" class="active">Desk</button>
+    <button data-tab="indices">Indices</button>
     <button data-tab="flows">Big Money</button>
     <button data-tab="backtest">Backtester</button>
     <button data-tab="portfolio">Portfolio</button>
@@ -23,8 +24,8 @@
     <button data-tab="settings">Settings</button>
   </nav>
   <div class="tools">
-    <button class="ghost" id="colorsBtn" title="Switch up/down colours">Colours: colour-blind safe</button>
-    <button class="ghost" id="themeBtn" title="Switch light / dark">Light / dark</button>
+    <button class="ghost" id="colorsBtn" title="Switch up/down colours">Colours: CB-safe</button>
+    <button class="ghost" id="themeBtn" title="Switch light / dark">Theme</button>
   </div>
 </header>
 
@@ -36,18 +37,18 @@
     <form class="fields" id="ideaForm">
       <label>Market
         <select name="market">
-          <option value="US">US (NYSE / Nasdaq)</option>
-          <option value="NSE">India · NSE</option>
-          <option value="BSE">India · BSE</option>
+          <option value="NSE">NSE stock</option>
+          <option value="IDX">NSE index</option>
+          <option value="BSE">BSE stock</option>
         </select>
       </label>
-      <label>Ticker <input name="symbol" value="AAPL" required autocomplete="off" list="watchlist" placeholder="AAPL, RELIANCE, TCS.NS"></label>
+      <label>Ticker <input name="symbol" value="RELIANCE" required autocomplete="off" list="watchlist" placeholder="RELIANCE, TCS, NIFTY 50"></label>
       <datalist id="watchlist"></datalist>
       <label>Data source
         <select name="source">
+          <option value="repo">Daily NSE data (no key)</option>
           <option value="twelve">Twelve Data (free key)</option>
-          <option value="repo">Daily watchlist (no key needed)</option>
-          <option value="alpha">Alpha Vantage (free key, 100 bars)</option>
+          <option value="alpha">Alpha Vantage (BSE, 100 bars)</option>
           <option value="csv">Upload CSV</option>
           <option value="demo">Demo: synthetic prices</option>
         </select>
@@ -70,7 +71,7 @@
       <label class="opt">Premium / share <input name="premium" type="number" step="any"></label>
       <label class="opt">Contract size / lot size <input name="mult" type="number" step="1" min="1" value="100"></label>
       <label>Horizon / days to expiry (trading days) <input name="horizon" type="number" value="20" min="1" max="252"></label>
-      <label><span>Account size (<span class="ccy">$</span>)</span> <input name="account" type="number" value="25000" min="1"></label>
+      <label><span>Account size (₹)</span> <input name="account" type="number" value="500000" min="1"></label>
       <label>Max risk per trade (%) <input name="riskPct" type="number" value="1" step="0.1" min="0.1"></label>
       <label>Max position (% of account) <input name="maxPosPct" type="number" value="20" min="1" max="100"></label>
       <label>Simulations <input name="sims" type="number" value="10000" min="1000" max="100000" step="1000"></label>
@@ -88,15 +89,29 @@
   <div id="deskOut"></div>
 </section>
 
+<!-- INDICES -->
+<section class="tab" id="tab-indices">
+  <div class="panel">
+    <h2>NSE indices</h2>
+    <div class="row">
+      <div class="seg" id="idxGroup" role="group" aria-label="Index group"></div>
+      <label style="flex-direction:row;align-items:center;gap:8px">Colour by
+        <select id="idxPeriod" style="width:auto"><option value="chg">1 day</option><option value="r1w">1 week</option><option value="r1m">1 month</option><option value="r3m">3 months</option><option value="r1y">1 year</option></select>
+      </label>
+      <label style="flex-direction:row;align-items:center;gap:8px;flex:1;min-width:180px">Find <input id="idxSearch" placeholder="bank, IT, midcap…"></label>
+    </div>
+  </div>
+  <div id="idxOut"><div class="panel muted">Loading…</div></div>
+</section>
+
 <!-- BIG MONEY -->
 <section class="tab" id="tab-flows">
   <div class="panel">
-    <h2>Big Money · where large players moved money</h2>
+    <h2>Big Money · where large players moved money on NSE</h2>
     <div class="row">
       <div class="seg" id="flowView" role="group" aria-label="Data set">
-        <button data-view="us" aria-pressed="true">US funds · 13F</button>
-        <button data-view="india" aria-pressed="false">India · bulk &amp; block deals</button>
-        <button data-view="fiidii" aria-pressed="false">India · FII / DII</button>
+        <button data-view="india" aria-pressed="true">Bulk &amp; block deals</button>
+        <button data-view="fiidii" aria-pressed="false">FII / DII flows</button>
       </div>
       <label id="flowDaysWrap" hidden style="flex-direction:row;align-items:center;gap:8px">Window
         <select id="flowDays" style="width:auto"><option value="1">Last day</option><option value="5" selected>Last 5 days</option><option value="30">Last 30 days</option></select>
@@ -135,7 +150,7 @@
   <div class="panel">
     <h2><span class="n">7</span>Portfolio Tracker</h2>
     <form class="fields" id="posForm">
-      <label>Ticker (.NS / .BO for India) <input name="symbol" required></label>
+      <label>Ticker (NSE; .BO for BSE) <input name="symbol" required></label>
       <label>Shares <input name="shares" type="number" step="any" required></label>
       <label>Cost / share <input name="cost" type="number" step="any" required></label>
       <label>Current price <input name="price" type="number" step="any" required></label>
@@ -143,10 +158,9 @@
       <button class="primary" type="submit">Add / update</button>
     </form>
     <div class="row" style="margin-top:10px">
-      <label style="flex-direction:row;align-items:center;gap:8px">Cash, US ($) <input id="cashUS" type="number" step="any" style="width:140px"></label>
-      <label style="flex-direction:row;align-items:center;gap:8px">Cash, India (₹) <input id="cashIN" type="number" step="any" style="width:140px"></label>
+      <label style="flex-direction:row;align-items:center;gap:8px">Cash (₹) <input id="cashIN" type="number" step="any" style="width:160px"></label>
     </div>
-    <p class="muted">Indian tickers take a suffix: RELIANCE.NS (NSE) or RELIANCE.BO (BSE). US and Indian holdings are totalled separately; rupees and dollars are never added together.</p>
+    <p class="muted">Type NSE symbols as-is (RELIANCE); add .BO for a BSE listing.</p>
   </div>
   <div id="pfOut"></div>
 </section>
@@ -157,7 +171,7 @@
     <h2><span class="n">9</span>Trade Journal</h2>
     <form class="fields" id="jForm">
       <label>Date <input name="date" type="date" required></label>
-      <label>Ticker (.NS / .BO for India) <input name="symbol" required></label>
+      <label>Ticker (NSE; .BO for BSE) <input name="symbol" required></label>
       <label>Side <select name="side"><option>long</option><option>short</option></select></label>
       <label>Size (shares) <input name="size" type="number" step="any" required></label>
       <label>Entry <input name="entry" type="number" step="any" required></label>
@@ -177,7 +191,7 @@
     <h2><span class="n">11</span>Alert System</h2>
     <p class="muted">This is a static site, so alerts are checked when a ticker is loaded on the Desk, while this page is open. For alerts while you're away, use a broker or a scheduled job.</p>
     <form class="fields" id="aForm">
-      <label>Ticker (.NS / .BO for India) <input name="symbol" required></label>
+      <label>Ticker (NSE; .BO for BSE) <input name="symbol" required></label>
       <label>Condition <select name="type" id="aType"></select></label>
       <label>Value <input name="value" required></label>
       <button class="primary" type="submit">Add alert</button>
@@ -195,17 +209,15 @@
     <form class="fields" id="keyForm">
       <label>Twelve Data key <input name="twelve" type="password" autocomplete="off"></label>
       <label>Alpha Vantage key <input name="alpha" type="password" autocomplete="off"></label>
-      <label>Finnhub key (news) <input name="finnhub" type="password" autocomplete="off"></label>
       <button class="primary" type="submit">Save</button>
       <button class="ghost" type="button" id="clearKeys">Clear keys</button>
     </form>
     <ul class="plain muted" style="margin-top:10px">
-      <li>Twelve Data: twelvedata.com/pricing (Basic, free): daily bars, 800 calls/day.</li>
-      <li>Alpha Vantage: alphavantage.co/support/#api-key: the free tier gives the last 100 daily bars only (too short for the 200-day average or a 12-month backtest).</li>
-      <li>Finnhub: finnhub.io/register: company news on the free tier.</li>
-      <li>No key? Export daily OHLCV as CSV from your broker or a charting site and use "Upload CSV".</li>
-      <li><b>No key needed:</b> "Daily watchlist" reads prices a scheduled GitHub Action downloads every weekday for the tickers in <code>data/watchlist.json</code>. It needs your Twelve Data key saved once as the repository secret <code>TWELVE_DATA_KEY</code>; after that anyone opening the site gets prices without a key.</li>
-      <li><b>India:</b> Twelve Data is asked for NSE/BSE directly, but its free plan may not include Indian exchanges; the app shows Twelve Data's own message if not. Alpha Vantage's free key covers BSE (last 100 days). For full history, download a CSV from nseindia.com (Get Quote → Historical Data) or bseindia.com, or export from your broker (e.g. Zerodha Console), then use "Upload CSV". Free news covers US companies only.</li>
+      <li><b>No key needed:</b> "Daily NSE data" reads what a scheduled GitHub Action downloads every weekday evening from NSE's published reports: every NSE index, plus the stocks in <code>data/watchlist.json</code> (edit it on GitHub to change the list).</li>
+      <li>Twelve Data (twelvedata.com, free): asked for NSE/BSE directly; its free plan may not include Indian exchanges, and the app shows Twelve Data's own message if not.</li>
+      <li>Alpha Vantage (alphavantage.co, free): BSE listings, last 100 daily bars only.</li>
+      <li>CSV: download from nseindia.com (Get Quote → Historical Data), niftyindices.com (index history), bseindia.com, or your broker (e.g. Zerodha Console), then choose "Upload CSV".</li>
+      <li>No free feed carries Indian company news; the Desk points to NSE announcements instead.</li>
     </ul>
     <div id="keyMsg" class="muted"></div>
   </div>
@@ -226,6 +238,7 @@
 <script src="js/agents.js"></script>
 <script src="js/chart.js"></script>
 <script src="js/flows.js"></script>
+<script src="js/indices.js"></script>
 <script src="js/app.js"></script>
 <div class="tip" id="tip" role="tooltip"></div>
 </body>

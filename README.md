@@ -1,4 +1,4 @@
-# Trader Desk
+# Trader Desk India
 
 An eleven-agent trade research desk that runs entirely in your browser. It has no
 server, no account and no build step, so it hosts free on GitHub Pages, Netlify

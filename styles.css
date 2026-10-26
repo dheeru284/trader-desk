@@ -46,11 +46,11 @@ header { display: flex; align-items: center; gap: 8px 18px; padding: 10px max(16
 header h1 { font-size: 17px; margin: 0; letter-spacing: .01em; font-weight: 700; }
 header h1 span { color: var(--muted); font-weight: 400; }
 nav { display: flex; gap: 2px; flex-wrap: wrap; }
-nav button { background: none; border: 0; color: var(--muted); padding: 8px 12px; border-radius: 8px; cursor: pointer; font: 500 15px var(--sans); min-height: 40px; }
+nav button { background: none; border: 0; color: var(--muted); padding: 8px 10px; border-radius: 8px; cursor: pointer; font: 500 15px var(--sans); min-height: 40px; }
 nav button:hover { color: var(--fg); background: var(--raised); }
 nav button.active { color: var(--fg); background: var(--grid); box-shadow: inset 0 -2px 0 var(--accent); }
 .tools { margin-left: auto; display: flex; gap: 6px; }
-.tools button { min-height: 40px; }
+.tools button { min-height: 38px; padding: 6px 12px; font-size: 14px; }
 
 main { max-width: 1240px; margin: 0 auto; padding: 18px max(16px, env(safe-area-inset-right, 0px)) 18px max(16px, env(safe-area-inset-left, 0px)); }
 section.tab { display: none; }
@@ -129,9 +129,23 @@ canvas { width: 100%; display: block; }
 .bars svg { display: block; width: 100%; }
 .bars text { font: 12px var(--sans); fill: var(--muted); }
 
+/* Indices */
+.idx-group { margin: 18px 0 8px; font-size: 15px; }
+.heat { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.cell { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; color: var(--fg); font: 13px var(--sans); min-height: 70px; }
+.cell:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cell .nm { font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+.cell .val { font: 600 14px var(--mono); font-variant-numeric: tabular-nums; }
+.cell .ch { font: 600 13px var(--mono); }
+.tile-btn { text-align: left; cursor: pointer; color: var(--fg); font: inherit; }
+.tile-btn:hover { border-color: var(--accent); }
+.tile-btn span { font-size: 20px; }
+.sortbtn { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+
 footer { text-align: center; color: var(--muted); font-size: 13px; padding: 24px 16px 44px; }
 @media (max-width: 640px) {
   header h1 span { display: none; }
   .call span { font-size: 18px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+.tile small.up { color: var(--up-ink); } .tile small.down { color: var(--down-ink); }

@@ -199,7 +199,8 @@
       maxLoss = qty * per;
       if (per < 1.0 * o.atr) warnings.push('Stop is inside 1 ATR: likely to be hit by normal noise.');
       warnings.push('Stop loss assumes a fill at the stop. Overnight gaps can fill worse.');
-      if (o.india) {
+      if (o.isIndex) warnings.push('An index cannot be bought directly. Trade it through an index ETF (NIFTYBEES, BANKBEES) or index futures/options; size here is in index units for planning.');
+      if (o.india && !o.isIndex) {
         if (o.side === 'short') warnings.push('Indian cash equities cannot be held short overnight: a delivery short must be squared off the same day. A multi-day short needs stock futures or options.');
         warnings.push('NSE/BSE price bands (circuit limits) can lock a stock at its limit; a stop may not fill until trading reopens inside the band.');
         warnings.push('Delivery trades pay STT and other charges of roughly 0.25% round trip before brokerage; a tight stop loses proportionally more to costs.');

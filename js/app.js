@@ -26,6 +26,7 @@
     document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('active', x === b));
     document.querySelectorAll('section.tab').forEach(s => s.classList.toggle('active', s.id === 'tab-' + b.dataset.tab));
     store.set('tab', b.dataset.tab);
+    if (b.dataset.tab === 'indices' && TD.indices && TD.repoIndices && !state.indicesLoaded) { state.indicesLoaded = true; TD.indices.render(); }
     if (b.dataset.tab === 'flows' && TD.flows && !state.flowsLoaded) { state.flowsLoaded = true; TD.flows.render(); }
     else if (b.dataset.tab === 'flows' && TD.flows) requestAnimationFrame(TD.flows.redraw);
     if (state.lastRender) requestAnimationFrame(state.lastRender);
@@ -45,7 +46,8 @@
   window.addEventListener('resize', () => { if (state.lastRender) state.lastRender(); });
   const applyColors = c => {
     if (c === 'classic') document.documentElement.dataset.colors = 'classic'; else delete document.documentElement.dataset.colors;
-    $('#colorsBtn').textContent = 'Colours: ' + (c === 'classic' ? 'classic green/red' : 'colour-blind safe');
+    $('#colorsBtn').textContent = c === 'classic' ? 'Colours: green/red' : 'Colours: CB-safe';
+    $('#colorsBtn').title = c === 'classic' ? 'Classic green/red. Click for colour-blind-safe blue/orange.' : 'Colour-blind-safe blue/orange. Click for classic green/red.';
   };
   applyColors(store.get('colors', 'safe'));
   $('#colorsBtn').addEventListener('click', () => {
@@ -61,7 +63,7 @@
   for (const [k, v] of Object.entries(keys())) if (keyForm[k]) keyForm[k].value = v;
   keyForm.addEventListener('submit', e => {
     e.preventDefault();
-    store.set('keys', { twelve: keyForm.twelve.value.trim(), alpha: keyForm.alpha.value.trim(), finnhub: keyForm.finnhub.value.trim() });
+    store.set('keys', { twelve: keyForm.twelve.value.trim(), alpha: keyForm.alpha.value.trim() });
     $('#keyMsg').textContent = 'Saved in this browser.';
   });
   $('#clearKeys').addEventListener('click', () => { store.set('keys', {}); keyForm.reset(); $('#keyMsg').textContent = 'Keys cleared.'; });
@@ -85,14 +87,10 @@
     if (!e || e.target === idea.market) {
       const mk = D.MARKETS[idea.market.value];
       document.querySelectorAll('.ccy').forEach(el => { el.textContent = mk.ccy; });
-      // US options are 100 shares; Indian F&O lot sizes differ per contract and change, so the user enters them.
-      idea.mult.value = isFinite(mk.mult) ? mk.mult : '';
-      idea.mult.placeholder = isFinite(mk.mult) ? '' : 'from NSE lot-size list';
+      // NSE F&O lot sizes differ per contract and are revised, so the user enters them.
+      idea.mult.placeholder = 'from NSE lot-size list';
       $('#btForm').costBps.value = mk.costBps;
-      // Swap the example account size between markets unless the user has typed their own.
-      const DEF = { '$': '25000', '₹': '500000' };
-      if (Object.values(DEF).includes(idea.account.value)) idea.account.value = DEF[mk.ccy];
-      if (e && /\.(NS|BO)$/.test(idea.symbol.value.toUpperCase()) && idea.market.value === 'US') idea.symbol.value = idea.symbol.value.replace(/\.(NS|BO)$/i, '');
+      fillTickerList();
     }
     $('#csvWrap').hidden = idea.source.value !== 'csv';
     const opt = idea.instrument.value !== 'stock';
@@ -103,30 +101,45 @@
   idea.addEventListener('change', syncIdea);
   syncIdea();
 
-  // Watchlist prices committed by the scheduled job (data/prices). Yahoo uses
-  // BRK-B for class shares and .NS / .BO for India, which matches our ids.
-  let priceIndex = null;
-  async function repoIndex() {
-    if (priceIndex) return priceIndex;
-    const r = await fetch('data/prices/index.json', { cache: 'no-cache' });
-    if (!r.ok) throw new Error('The daily watchlist is not available yet (HTTP ' + r.status + '). It appears after the scheduled job first runs.');
-    return (priceIndex = await r.json());
+  // Daily NSE data committed by the scheduled job: data/indices (every NSE
+  // index) and data/prices (watchlist stocks).
+  let priceIndex = null, indexIndex = null;
+  async function getIndexFile(path) {
+    const r = await fetch(path, { cache: 'no-cache' });
+    if (!r.ok) throw new Error('Daily NSE data is not available yet (HTTP ' + r.status + '). It appears after the scheduled job first runs.');
+    return r.json();
   }
+  const repoIndex = async () => priceIndex || (priceIndex = await getIndexFile('data/prices/index.json'));
+  const repoIndices = async () => indexIndex || (indexIndex = await getIndexFile('data/indices/index.json'));
   async function repoBars(sym) {
-    const idx = await repoIndex();
-    const id = sym.india ? sym.id : sym.base.replace('.', '-');
-    const hit = idx.tickers[id];
-    if (!Object.keys(idx.tickers).length) throw new Error('The daily watchlist has no prices yet. Save your Twelve Data key as the repository secret TWELVE_DATA_KEY (see README), or pick Twelve Data as the source.');
-    if (!hit) throw new Error(sym.id + ' is not in the daily watchlist (' + Object.keys(idx.tickers).length + ' tickers). Add it to data/watchlist.json on GitHub, or use Twelve Data or a CSV.');
-    const r = await fetch('data/prices/' + encodeURIComponent(hit.file), { cache: 'no-cache' });
-    if (!r.ok) throw new Error('Could not read ' + hit.file + ' (HTTP ' + r.status + ').');
+    let file, hit;
+    if (sym.index) {
+      const idx = await repoIndices();
+      hit = idx.indices[D.indexSlug(sym.base)];
+      if (!hit) throw new Error(sym.base + ' is not an NSE index name in the daily snapshot. Pick one from the list (e.g. NIFTY 50, NIFTY BANK, NIFTY IT) or open the Indices tab.');
+      file = 'data/indices/' + encodeURIComponent(hit.file);
+    } else {
+      const idx = await repoIndex();
+      hit = idx.tickers[sym.id];
+      if (!hit) throw new Error(sym.id + ' is not in the daily watchlist (' + Object.keys(idx.tickers).length + ' stocks). Add it to data/watchlist.json on GitHub, or use Twelve Data or a CSV.');
+      file = 'data/prices/' + encodeURIComponent(hit.file);
+    }
+    const r = await fetch(file, { cache: 'no-cache' });
+    if (!r.ok) throw new Error('Could not read ' + file + ' (HTTP ' + r.status + ').');
     const j = await r.json();
-    state.repoMeta = { last: hit.last, source: j.source, fetched: j.fetched };
+    state.repoMeta = { last: hit.last, source: j.source };
     return j.bars.map(b => ({ t: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
   }
-  repoIndex().then(idx => {
-    $('#watchlist').innerHTML = Object.keys(idx.tickers).sort().map(t => '<option value="' + esc(t.replace(/-/, '.')) + '">').join('');
-  }).catch(() => { /* offline or first run: the source reports it when chosen */ });
+  async function fillTickerList() {
+    try {
+      const names = idea.market.value === 'IDX'
+        ? Object.values((await repoIndices()).indices).map(v => v.name.toUpperCase())
+        : Object.keys((await repoIndex()).tickers).filter(t => t.endsWith(idea.market.value === 'BSE' ? '.BO' : '.NS')).map(t => t.replace(/\.(NS|BO)$/, ''));
+      $('#watchlist').innerHTML = names.sort().map(t => '<option value="' + esc(t) + '">').join('');
+    } catch (e) { $('#watchlist').innerHTML = ''; }
+  }
+  TD.repoIndices = repoIndices;
+  fillTickerList();
 
   async function loadBars(sym, source) {
     const k = keys();
@@ -161,12 +174,10 @@
     if (bars.length < 60) throw new Error('Only ' + bars.length + ' bars returned; need at least 60.');
     state.bars = bars; state.symbol = symbol; state.synthetic = source === 'demo';
 
-    let newsErr = '';
+    // No free news feed covers NSE/BSE companies; the panel says where to look.
     state.news = [];
-    if (source === 'demo') newsErr = 'Demo mode: no news (synthetic ticker).';
-    else {
-      try { state.news = await D.finnhubNews(sym, keys().finnhub); } catch (err) { newsErr = err.message; }
-    }
+    const newsErr = source === 'demo' ? 'Demo mode: no news (synthetic ticker).'
+      : 'no free news feed covers Indian companies. Check NSE corporate announcements, Moneycontrol or Economic Times before entering, especially for results dates.';
 
     const scan = A.chartScanner(bars);
     state.scan = scan;
@@ -200,7 +211,7 @@
     const risk = A.riskManager({
       instrument, account, riskPct: num('riskPct'), maxPosPct: num('maxPosPct'), entry, stop: exit.stop,
       premium, mult, atr: scan.atr, symbol, side, india: sym.india,
-      exposure: positions.filter(p => D.ccyOf(p.symbol) === sym.ccy).reduce((s, p) => s + p.shares * p.price, 0),
+      exposure: positions.reduce((s, p) => s + p.shares * p.price, 0), isIndex: sym.index,
       heldAlready: positions.some(p => p.symbol === symbol),
     });
     const tm = A.timeMachine({
@@ -226,7 +237,7 @@
     const optLabel = opt ? x.symbol + ' ' + f2(x.strike) + ' ' + x.instrument.toUpperCase() + ' @ ' + f2(x.premium) : '';
     const html = [];
     if (x.source === 'demo') html.push('<div class="banner">Demo mode: these prices are SYNTHETIC, generated from the ticker name. They are not ' + esc(x.symbol) + '\'s real prices. Add a free data key in Settings for real data.</div>');
-    if (x.source === 'repo' && state.repoMeta) html.push('<div class="banner" style="background:var(--raised);color:var(--muted);border-color:var(--line)">Daily watchlist data: last bar ' + esc(state.repoMeta.last) + ', from ' + esc(state.repoMeta.source) + '. Updated once each weekday after the US close; not intraday.</div>');
+    if (x.source === 'repo' && state.repoMeta) html.push('<div class="banner" style="background:var(--raised);color:var(--muted);border-color:var(--line)">Daily NSE data: last bar ' + esc(state.repoMeta.last) + ', from ' + esc(state.repoMeta.source) + '. Updated each weekday evening after NSE publishes its reports; not intraday.</div>');
     if (x.source === 'alpha' && x.sym.market === 'NSE') html.push('<div class="banner">Alpha Vantage lists Indian stocks on BSE only, so these are ' + esc(x.sym.base) + '\'s BSE prices. They track NSE closely but not exactly.</div>');
     if (x.bars.length < 200) html.push('<div class="banner">Only ' + x.bars.length + ' bars loaded: the 200-day average and 52-week stats are partial.</div>');
     if (x.fired.length) html.push('<div class="banner">Alerts triggered: ' + x.fired.map(f => esc(A.ALERT_TYPES[f.alert.type] + ' ' + f.alert.value + ' (' + f.detail + ')')).join('; ') + '</div>');
@@ -380,14 +391,12 @@
 
   // Portfolio ----------------------------------------------------------------
   // Holdings are grouped by currency; a rupee is never added to a dollar.
-  const GROUPS = [{ ccy: '$', key: 'US', label: 'US ($)', title: 'US holdings ($)', note: 'Check taxes and US wash-sale rules before selling.' },
-    { ccy: '₹', key: 'IN', label: 'India (₹)', title: 'India holdings (₹)', note: 'Check STCG/LTCG tax and delivery charges before selling.' }];
-  const canon = raw => D.parseSymbol(raw, 'US').id;
-  const cashMap = () => { const c = store.get('cash', {}); return typeof c === 'number' ? { US: c } : c; };
+  const GROUPS = [{ ccy: '₹', key: 'IN', label: 'India (₹)', title: 'India holdings (₹)', note: 'Check STCG/LTCG tax and delivery charges before selling.' }];
+  const canon = raw => D.parseSymbol(raw, 'NSE').id;
+  const cashMap = () => { const c = store.get('cash', {}); return typeof c === 'number' ? { IN: c } : c; };
   const pf = $('#posForm');
-  $('#cashUS').value = cashMap().US || '';
   $('#cashIN').value = cashMap().IN || '';
-  for (const [id, k] of [['#cashUS', 'US'], ['#cashIN', 'IN']]) {
+  for (const [id, k] of [['#cashIN', 'IN']]) {
     $(id).addEventListener('change', e => { const c = cashMap(); c[k] = +e.target.value || 0; store.set('cash', c); renderPortfolio(); });
   }
   pf.addEventListener('submit', e => {
@@ -497,8 +506,7 @@
     syncIdea({ target: idea.market });
     idea.symbol.value = ticker;
     // Use the no-key watchlist when it has the ticker, else a keyed source if one is saved.
-    const id = market === 'US' ? ticker.replace('.', '-') : ticker + (market === 'BSE' ? '.BO' : '.NS');
-    const inRepo = priceIndex && priceIndex.tickers[id];
+    const inRepo = market === 'IDX' ? indexIndex && indexIndex.indices[D.indexSlug(ticker)] : priceIndex && priceIndex.tickers[ticker + (market === 'BSE' ? '.BO' : '.NS')];
     idea.source.value = inRepo || !keys().twelve ? 'repo' : 'twelve';
     syncIdea();
     document.querySelector('#nav button[data-tab="desk"]').click();
@@ -506,6 +514,8 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   if (TD.flows) TD.flows.init();
+  if (TD.indices) TD.indices.init();
+  if (store.get('tab', 'desk') === 'indices' && TD.indices) { state.indicesLoaded = true; TD.indices.render(); }
   if (store.get('tab', 'desk') === 'flows' && TD.flows) { state.flowsLoaded = true; TD.flows.render(); }
 
   renderPortfolio(); renderJournal(); renderAlerts();

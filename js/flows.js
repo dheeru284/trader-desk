@@ -250,7 +250,7 @@
   }
 
   // ---------------------------------------------------------------- page
-  const ui = { view: 'us', days: 5, topN: 12, player: '', roundTrips: false };
+  const ui = { view: 'india', days: 5, topN: 12, player: '', roundTrips: false };
   let redraw = null;
 
   function flowTable(rows, ccy, onStock) {
@@ -275,28 +275,7 @@
     };
     const onStock = TD.openOnDesk;
     try {
-      if (ui.view === 'us') {
-        const d = await load('data/flows/us_13f.json');
-        const rows = d.flows.filter(f => !ui.player || f.player === ui.player).map(f => ({
-          player: f.player, stock: f.stock, ticker: f.ticker, key: f.cusip, side: f.side, value: f.value,
-          action: { new: 'New position', added: 'Added', trimmed: 'Trimmed', sold_out: 'Sold out' }[f.kind] || f.kind }));
-        const buy = rows.filter(r => r.side === 'buy').reduce((s, r) => s + r.value, 0), sell = rows.filter(r => r.side === 'sell').reduce((s, r) => s + r.value, 0);
-        const lag = Math.round((Date.now() - new Date(d.latest_period)) / 864e5);
-        out.innerHTML = statusNote('flows13f')
-          + '<div class="panel"><h2>US hedge funds and investors · 13F · quarter ended ' + esc(d.latest_period) + '</h2>'
-          + '<div class="banner">These positions were as of ' + esc(d.latest_period) + ' (' + lag + ' days ago). Funds file 13F reports up to 45 days after each quarter, so treat this as what they did, not what they are doing.</div>'
-          + '<div class="tiles"><div class="tile"><b>▲ Bought / added</b><span class="up">' + fmtFlow(buy, '$') + '</span><small>' + d.funds.length + ' funds</small></div>'
-          + '<div class="tile"><b>▼ Sold / trimmed</b><span class="down">' + fmtFlow(sell, '$') + '</span><small>largest ' + 25 + ' moves per fund</small></div>'
-          + '<div class="tile"><b>Net</b><span class="' + (buy >= sell ? 'up' : 'down') + '">' + (buy >= sell ? '▲ ' : '▼ ') + fmtFlow(Math.abs(buy - sell), '$') + '</span><small>updated ' + ago(d.updated) + '</small></div></div>'
-          + '<div class="sankey-wrap" id="sk"></div><p class="muted" id="skNote"></p>'
-          + '<p class="muted">' + esc(d.method) + '</p>' + DISC + '</div>'
-          + '<div class="panel"><h2>Funds included</h2><div class="scroll"><table><thead><tr><th>Fund</th><th>Known for</th><th>Quarter</th><th>Filed</th><th class="num">13F value</th></tr></thead><tbody>'
-          + d.funds.map(f => '<tr><td>' + esc(f.name) + '</td><td>' + esc(f.person) + '</td><td>' + esc(f.period) + '</td><td>' + esc(f.filed) + '</td><td class="num">' + fmtFlow(f.portfolio_value, '$') + '</td></tr>').join('')
-          + '</tbody></table></div>' + (Object.keys(d.errors || {}).length ? '<p class="muted">Could not read: ' + esc(Object.keys(d.errors).join(', ')) + '.</p>' : '') + '</div>'
-          + '<div class="panel"><h2>Every flow (table view)</h2>' + flowTable(rows, '$', onStock) + '</div>';
-        fillPlayers(d.flows.map(f => f.player));
-        redraw = () => { const r = sankey($('#sk'), rows, { ccy: '$', topStocks: ui.topN, onStock: s => onStock(s.ticker, 'US') }); if (r) $('#skNote').textContent = 'Top ' + r.shown + ' of ' + r.stocks + ' stocks by money moved. Band width is the dollar value of the change. Hover to trace a player; click a stock to analyse it.'; };
-      } else if (ui.view === 'india') {
+      if (ui.view === 'india') {
         const d = await load('data/flows/in_deals.json');
         const dates = d.dates.slice(-ui.days);
         const deals = d.deals.filter(x => dates.includes(x.date) && (!ui.player || x.client === ui.player));
@@ -353,9 +332,9 @@
       redraw();
       const rt = $('#rtToggle');
       if (rt) rt.addEventListener('change', () => { ui.roundTrips = rt.checked; render(); });
-      document.querySelectorAll('#flowOut [data-open]').forEach(b => b.addEventListener('click', () => onStock(b.dataset.open, ui.view === 'us' ? 'US' : 'NSE')));
+      document.querySelectorAll('#flowOut [data-open]').forEach(b => b.addEventListener('click', () => onStock(b.dataset.open, 'NSE')));
     } catch (err) {
-      out.innerHTML = statusNote(ui.view === 'us' ? 'flows13f' : ui.view === 'india' ? 'india_deals' : 'india_fiidii')
+      out.innerHTML = statusNote(ui.view === 'india' ? 'india_deals' : 'india_fiidii')
         + '<div class="panel"><p class="err">Could not load this view: ' + esc(err.message) + '</p><p class="muted">Data files appear after the scheduled job\'s first successful run. Opened from a file:// URL, browsers block reading them; use the GitHub Pages site.</p></div>';
       redraw = null;
     }
@@ -366,7 +345,7 @@
     const uniq = [...new Set(names)].sort();
     sel.innerHTML = '<option value="">All players</option>' + uniq.map(n => '<option' + (n === ui.player ? ' selected' : '') + ' value="' + esc(n) + '">' + esc(trunc(n, 60)) + '</option>').join('');
     sel.disabled = !uniq.length;
-    $('#flowDaysWrap').hidden = ui.view === 'us';
+    $('#flowDaysWrap').hidden = false;
   }
 
   function init() {

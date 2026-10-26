@@ -4,21 +4,25 @@
 (function (TD) {
   'use strict';
 
-  // Markets. A symbol's id carries its market: AAPL (US), RELIANCE.NS (NSE),
-  // RELIANCE.BO (BSE), the suffixes Indian brokers and Yahoo use.
+  // Markets (India only). A stock's id carries its exchange: RELIANCE.NS (NSE),
+  // RELIANCE.BO (BSE), as Indian brokers write them. An NSE index's id is its
+  // official name in capitals, e.g. NIFTY 50, NIFTY BANK, INDIA VIX.
   const MARKETS = {
-    US: { name: 'US', ccy: '$', locale: 'en-US', suffix: '', mult: 100, costBps: 5 },
-    NSE: { name: 'India · NSE', ccy: '₹', locale: 'en-IN', suffix: '.NS', mult: NaN, costBps: 15 },
-    BSE: { name: 'India · BSE', ccy: '₹', locale: 'en-IN', suffix: '.BO', mult: NaN, costBps: 15 },
+    NSE: { name: 'NSE stock', ccy: '₹', locale: 'en-IN', suffix: '.NS', mult: NaN, costBps: 15 },
+    BSE: { name: 'BSE stock', ccy: '₹', locale: 'en-IN', suffix: '.BO', mult: NaN, costBps: 15 },
+    IDX: { name: 'NSE index', ccy: '₹', locale: 'en-IN', suffix: '', mult: NaN, costBps: 5 },
   };
-  function parseSymbol(raw, market = 'US') {
-    let base = String(raw).trim().toUpperCase(), m = market;
+  function parseSymbol(raw, market = 'NSE') {
+    let base = String(raw).trim().toUpperCase().replace(/\s+/g, ' '), m = market;
     const sfx = base.match(/\.(NS|NSE|BO|BSE)$/);
     if (sfx) { m = sfx[1].startsWith('N') ? 'NSE' : 'BSE'; base = base.slice(0, sfx.index); }
-    return { base, market: m, id: base + MARKETS[m].suffix, india: m !== 'US', ...MARKETS[m] };
+    else if (/^(NIFTY|INDIA VIX)/.test(base) && !/BEES$/.test(base) && (m !== 'IDX')) m = 'IDX';
+    if (m === 'IDX' && base === 'NIFTY') base = 'NIFTY 50';
+    return { base, market: m, id: base + MARKETS[m].suffix, india: true, index: m === 'IDX', ...MARKETS[m] };
   }
-  const marketOf = id => /\.NS$/.test(id) ? 'NSE' : /\.BO$/.test(id) ? 'BSE' : 'US';
-  const ccyOf = id => MARKETS[marketOf(id)].ccy;
+  const marketOf = id => /\.NS$/.test(id) ? 'NSE' : /\.BO$/.test(id) ? 'BSE' : 'IDX';
+  const ccyOf = () => '₹';
+  const indexSlug = name => String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
   async function getJSON(url) {
     let res;
@@ -51,7 +55,7 @@
   async function twelveData(sym, key) {
     if (!key) throw new Error('No Twelve Data key. Add a free one in Settings.');
     const url = 'https://api.twelvedata.com/time_series?interval=1day&outputsize=600'
-      + '&symbol=' + encodeURIComponent(sym.base) + (sym.india ? '&exchange=' + sym.market : '')
+      + '&symbol=' + encodeURIComponent(sym.base) + '&exchange=' + (sym.market === 'BSE' ? 'BSE' : 'NSE')
       + '&apikey=' + encodeURIComponent(key);
     const j = await getJSON(url);
     if (j.status === 'error' || j.code >= 400) {
@@ -60,9 +64,9 @@
       if (/plan|upgrade|subscri|access|available starting/i.test(msg)) {
         hint = sym.india ? ' Your Twelve Data plan does not cover ' + sym.market + '. Try Alpha Vantage (BSE, last 100 days) or upload a CSV from nseindia.com / your broker.' : '';
       } else if (/symbol|figi|not found|invalid/i.test(msg)) {
-        hint = ' Check that ' + sym.base + ' trades on ' + (sym.india ? sym.market + ' (Indian tickers look like RELIANCE, TCS, INFY)' : 'a US exchange') + ', and that the Market setting matches.';
+        hint = sym.index ? ' Twelve Data may not carry NSE indices; use "Daily NSE data" for indices.' : ' Check that ' + sym.base + ' trades on ' + sym.market + ' (tickers look like RELIANCE, TCS, INFY), and that the Market setting matches.';
       }
-      throw new Error('Twelve Data: ' + msg + ' (looked up ' + sym.base + (sym.india ? ' on ' + sym.market : ' in the US') + ').' + hint);
+      throw new Error('Twelve Data: ' + msg + ' (looked up ' + sym.base + ' on ' + (sym.market === 'BSE' ? 'BSE' : 'NSE') + ').' + hint);
     }
     return clean((j.values || []).map(v => ({
       t: v.datetime.slice(0, 10), o: +v.open, h: +v.high, l: +v.low, c: +v.close, v: +v.volume,
@@ -74,7 +78,8 @@
   // BSE listing of the same company.
   async function alphaVantage(sym, key) {
     if (!key) throw new Error('No Alpha Vantage key. Add a free one in Settings.');
-    const avSymbol = sym.india ? sym.base + '.BSE' : sym.base;
+    if (sym.index) throw new Error('Alpha Vantage does not carry NSE indices; use "Daily NSE data" or a CSV from niftyindices.com.');
+    const avSymbol = sym.base + '.BSE';
     const url = 'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&outputsize=compact'
       + '&symbol=' + encodeURIComponent(avSymbol) + '&apikey=' + encodeURIComponent(key);
     const j = await getJSON(url);
@@ -83,23 +88,6 @@
     return clean(Object.entries(series).map(([t, v]) => ({
       t, o: +v['1. open'], h: +v['2. high'], l: +v['3. low'], c: +v['4. close'], v: +v['5. volume'],
     })));
-  }
-
-  // Finnhub company news (free tier). Returns [{time, headline, source, summary, url}].
-  async function finnhubNews(sym, key, days = 14) {
-    if (sym.india) throw new Error('the free Finnhub feed covers North American companies only, so there are no NSE/BSE headlines here. Check Moneycontrol, Economic Times or NSE corporate announcements before entering.');
-    if (!key) throw new Error('No Finnhub key. News needs a free key from finnhub.io.');
-    const symbol = sym.base;
-    const to = new Date(), from = new Date(Date.now() - days * 864e5);
-    const d = x => x.toISOString().slice(0, 10);
-    const url = 'https://finnhub.io/api/v1/company-news?symbol=' + encodeURIComponent(symbol)
-      + '&from=' + d(from) + '&to=' + d(to) + '&token=' + encodeURIComponent(key);
-    const j = await getJSON(url);
-    if (!Array.isArray(j)) throw new Error('Finnhub: ' + (j.error || 'unexpected response'));
-    return j.map(n => ({
-      time: new Date(n.datetime * 1000), headline: n.headline || '', source: n.source || '',
-      summary: n.summary || '', url: n.url || '',
-    }));
   }
 
   // CSV with a header row. Accepts Yahoo/Stooq/broker exports and NSE/BSE
@@ -127,7 +115,7 @@
     m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/);
     if (m) {
       let d = +m[1], mo = +m[2];
-      if (!dayFirst && mo <= 12 && d <= 12) [d, mo] = [mo, d];   // US style MM/DD/YYYY
+      if (!dayFirst && mo <= 12 && d <= 12) [d, mo] = [mo, d];   // MM/DD/YYYY exports
       else if (mo > 12) [d, mo] = [mo, d];
       return m[3] + '-' + pad(mo) + '-' + pad(d);
     }
@@ -189,5 +177,5 @@
     return bars;
   }
 
-  TD.data = { MARKETS, parseSymbol, marketOf, ccyOf, twelveData, alphaVantage, finnhubNews, parseCSV, parseDate, synthetic };
+  TD.data = { MARKETS, parseSymbol, marketOf, ccyOf, indexSlug, twelveData, alphaVantage, parseCSV, parseDate, synthetic };
 })(window.TD = window.TD || {});
