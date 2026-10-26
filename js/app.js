@@ -26,6 +26,8 @@
     document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('active', x === b));
     document.querySelectorAll('section.tab').forEach(s => s.classList.toggle('active', s.id === 'tab-' + b.dataset.tab));
     store.set('tab', b.dataset.tab);
+    if (b.dataset.tab === 'flows' && TD.flows && !state.flowsLoaded) { state.flowsLoaded = true; TD.flows.render(); }
+    else if (b.dataset.tab === 'flows' && TD.flows) requestAnimationFrame(TD.flows.redraw);
     if (state.lastRender) requestAnimationFrame(state.lastRender);
   });
   const savedTab = store.get('tab', 'desk');
@@ -41,6 +43,17 @@
     if (state.lastRender) state.lastRender();
   });
   window.addEventListener('resize', () => { if (state.lastRender) state.lastRender(); });
+  const applyColors = c => {
+    if (c === 'classic') document.documentElement.dataset.colors = 'classic'; else delete document.documentElement.dataset.colors;
+    $('#colorsBtn').textContent = 'Colours: ' + (c === 'classic' ? 'classic green/red' : 'colour-blind safe');
+  };
+  applyColors(store.get('colors', 'safe'));
+  $('#colorsBtn').addEventListener('click', () => {
+    const c = document.documentElement.dataset.colors === 'classic' ? 'safe' : 'classic';
+    applyColors(c); store.set('colors', c);
+    if (state.lastRender) state.lastRender();
+    if (TD.flows) TD.flows.redraw();
+  });
 
   // Settings -----------------------------------------------------------------
   const keys = () => store.get('keys', {});
@@ -90,8 +103,33 @@
   idea.addEventListener('change', syncIdea);
   syncIdea();
 
+  // Watchlist prices committed by the scheduled job (data/prices). Yahoo uses
+  // BRK-B for class shares and .NS / .BO for India, which matches our ids.
+  let priceIndex = null;
+  async function repoIndex() {
+    if (priceIndex) return priceIndex;
+    const r = await fetch('data/prices/index.json', { cache: 'no-cache' });
+    if (!r.ok) throw new Error('The daily watchlist is not available yet (HTTP ' + r.status + '). It appears after the scheduled job first runs.');
+    return (priceIndex = await r.json());
+  }
+  async function repoBars(sym) {
+    const idx = await repoIndex();
+    const id = sym.india ? sym.id : sym.base.replace('.', '-');
+    const hit = idx.tickers[id];
+    if (!hit) throw new Error(sym.id + ' is not in the daily watchlist (' + Object.keys(idx.tickers).length + ' tickers). Add it to data/watchlist.json on GitHub, or use Twelve Data or a CSV.');
+    const r = await fetch('data/prices/' + encodeURIComponent(hit.file), { cache: 'no-cache' });
+    if (!r.ok) throw new Error('Could not read ' + hit.file + ' (HTTP ' + r.status + ').');
+    const j = await r.json();
+    state.repoMeta = { last: hit.last, source: j.source, fetched: j.fetched };
+    return j.bars.map(b => ({ t: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] }));
+  }
+  repoIndex().then(idx => {
+    $('#watchlist').innerHTML = Object.keys(idx.tickers).sort().map(t => '<option value="' + esc(t.replace(/-/, '.')) + '">').join('');
+  }).catch(() => { /* offline or first run: the source reports it when chosen */ });
+
   async function loadBars(sym, source) {
     const k = keys();
+    if (source === 'repo') return repoBars(sym);
     if (source === 'twelve') return D.twelveData(sym, k.twelve);
     if (source === 'alpha') return D.alphaVantage(sym, k.alpha);
     if (source === 'csv') {
@@ -187,6 +225,7 @@
     const optLabel = opt ? x.symbol + ' ' + f2(x.strike) + ' ' + x.instrument.toUpperCase() + ' @ ' + f2(x.premium) : '';
     const html = [];
     if (x.source === 'demo') html.push('<div class="banner">Demo mode: these prices are SYNTHETIC, generated from the ticker name. They are not ' + esc(x.symbol) + '\'s real prices. Add a free data key in Settings for real data.</div>');
+    if (x.source === 'repo' && state.repoMeta) html.push('<div class="banner" style="background:var(--raised);color:var(--muted);border-color:var(--line)">Daily watchlist data: last bar ' + esc(state.repoMeta.last) + ', from ' + esc(state.repoMeta.source) + '. Updated once each weekday after the US close; not intraday.</div>');
     if (x.source === 'alpha' && x.sym.market === 'NSE') html.push('<div class="banner">Alpha Vantage lists Indian stocks on BSE only, so these are ' + esc(x.sym.base) + '\'s BSE prices. They track NSE closely but not exactly.</div>');
     if (x.bars.length < 200) html.push('<div class="banner">Only ' + x.bars.length + ' bars loaded: the 200-day average and 52-week stats are partial.</div>');
     if (x.fired.length) html.push('<div class="banner">Alerts triggered: ' + x.fired.map(f => esc(A.ALERT_TYPES[f.alert.type] + ' ' + f.alert.value + ' (' + f.detail + ')')).join('; ') + '</div>');
@@ -451,6 +490,22 @@
       store.set('alerts', store.get('alerts', []).filter(a => String(a.id) !== b.dataset.adel)); renderAlerts();
     }));
   }
+
+  TD.openOnDesk = (ticker, market) => {
+    idea.market.value = market;
+    syncIdea({ target: idea.market });
+    idea.symbol.value = ticker;
+    // Use the no-key watchlist when it has the ticker, else a keyed source if one is saved.
+    const id = market === 'US' ? ticker.replace('.', '-') : ticker + (market === 'BSE' ? '.BO' : '.NS');
+    const inRepo = priceIndex && priceIndex.tickers[id];
+    idea.source.value = inRepo || !keys().twelve ? 'repo' : 'twelve';
+    syncIdea();
+    document.querySelector('#nav button[data-tab="desk"]').click();
+    idea.requestSubmit();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  if (TD.flows) TD.flows.init();
+  if (store.get('tab', 'desk') === 'flows' && TD.flows) { state.flowsLoaded = true; TD.flows.render(); }
 
   renderPortfolio(); renderJournal(); renderAlerts();
 })(window.TD = window.TD || {});

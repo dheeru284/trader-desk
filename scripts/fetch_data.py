@@ -29,6 +29,7 @@ import re
 import sys
 import time
 import traceback
+import urllib.error
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -79,71 +80,111 @@ def safe_name(symbol):
     return re.sub(r"[^A-Za-z0-9.\-]", "_", symbol) + ".json"
 
 
-def yahoo_daily(symbol):
-    """~2 years of daily bars from Yahoo's chart endpoint (unofficial)."""
-    q = urllib.request.quote(symbol, safe="")
-    last = None
-    for host in ("query1", "query2"):
-        url = "https://%s.finance.yahoo.com/v8/finance/chart/%s?range=2y&interval=1d&includePrePost=false" % (host, q)
-        try:
-            j = json.loads(http_get(url).decode("utf-8"))
-            break
-        except Exception as exc:  # try the other host once
-            last = exc
-            time.sleep(1.5)
-    else:
-        raise last
-    res = (j.get("chart") or {}).get("result") or []
-    if not res:
-        err = (j.get("chart") or {}).get("error") or {}
-        raise ValueError(err.get("description") or "no result")
-    r = res[0]
-    ts = r.get("timestamp") or []
-    qd = (r.get("indicators") or {}).get("quote", [{}])[0]
-    offset = (r.get("meta") or {}).get("gmtoffset", 0)
-    bars = []
-    for i, t in enumerate(ts):
-        o, h, l, c, v = (qd.get(k, [None] * len(ts))[i] for k in ("open", "high", "low", "close", "volume"))
-        if None in (o, h, l, c) or min(o, h, l, c) <= 0:
+def stooq_daily(symbol):
+    """Stooq's public daily CSV download. US tickers are aapl.us (brk-b.us)."""
+    s = symbol.lower() + ".us"
+    start = (dt.date.today() - dt.timedelta(days=760)).strftime("%Y%m%d")
+    text = http_get("https://stooq.com/q/d/l/?s=%s&i=d&d1=%s" % (urllib.request.quote(s), start),
+                    {"User-Agent": "trader-desk/1.0 (github.com/dheeru284/trader-desk)"}, timeout=20).decode("utf-8", "replace")
+    if not text.lower().startswith("date,"):
+        raise ValueError("stooq: " + text.strip()[:100])
+    bars = {}
+    for r in list(csv.reader(io.StringIO(text)))[1:]:
+        if len(r) >= 5 and min(num(x) for x in r[1:5]) > 0:
+            bars[r[0]] = [r[0], num(r[1]), num(r[2]), num(r[3]), num(r[4]), int(num(r[5])) if len(r) > 5 else 0]
+    return [bars[k] for k in sorted(bars)]
+
+
+def nse_bhavcopy(day):
+    """NSE's published end-of-day file for one date: {symbol: bar} for EQ series, or None if no file."""
+    url = "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_%s.csv" % day.strftime("%d%m%Y")
+    try:
+        text = http_get(url, {"User-Agent": "trader-desk/1.0 (github.com/dheeru284/trader-desk)"}, timeout=20).decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None  # holiday or weekend
+        raise
+    rows = list(csv.reader(io.StringIO(text)))
+    head = [h.strip().upper() for h in rows[0]]
+    ix = {k: head.index(k) for k in ("SYMBOL", "SERIES", "OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE", "TTL_TRD_QNTY")}
+    out = {}
+    for r in rows[1:]:
+        if len(r) < len(head) or r[ix["SERIES"]].strip() != "EQ":
             continue
-        day = dt.datetime.fromtimestamp(t + offset, dt.timezone.utc).strftime("%Y-%m-%d")
-        bars.append([day, round(o, 4), round(h, 4), round(l, 4), round(c, 4), int(v or 0)])
-    # Yahoo can repeat the current day; keep the last row per date.
-    dedup = {}
-    for b in bars:
-        dedup[b[0]] = b
-    bars = [dedup[k] for k in sorted(dedup)]
-    meta = r.get("meta") or {}
-    return bars, meta.get("currency"), meta.get("exchangeName")
+        out[r[ix["SYMBOL"]].strip()] = [day.isoformat(), num(r[ix["OPEN_PRICE"]]), num(r[ix["HIGH_PRICE"]]),
+                                        num(r[ix["LOW_PRICE"]]), num(r[ix["CLOSE_PRICE"]]), int(num(r[ix["TTL_TRD_QNTY"]]))]
+    return out
+
+
+def save_prices(index, sym, bars, label, ccy):
+    fname = safe_name(sym)
+    write_json("prices/" + fname, {"symbol": sym, "currency": ccy, "source": label, "fetched": NOW, "bars": bars})
+    index["tickers"][sym] = {"file": fname, "last": bars[-1][0], "bars": len(bars), "source": label}
 
 
 def section_prices():
     wl = read_json("watchlist.json", {})
-    symbols = list(dict.fromkeys((wl.get("us") or []) + (wl.get("india") or [])))
+    us = wl.get("us") or []
+    india = [s for s in (wl.get("india") or []) if s.endswith(".NS")]
     index = read_json("prices/index.json", {"tickers": {}})
-    ok, failed = 0, {}
-    for s in symbols:
+    ok, failed = {"us": 0, "india": 0}, {}
+
+    for s in us:
         try:
-            bars, ccy, exch = yahoo_daily(s)
+            bars = stooq_daily(s)
             if len(bars) < 60:
                 raise ValueError("only %d bars" % len(bars))
-            fname = safe_name(s)
-            write_json("prices/" + fname, {"symbol": s, "currency": ccy, "exchange": exch,
-                                           "source": "Yahoo Finance chart data (unofficial)",
-                                           "fetched": NOW, "bars": bars})
-            index["tickers"][s] = {"file": fname, "last": bars[-1][0], "bars": len(bars),
-                                   "currency": ccy, "exchange": exch}
-            ok += 1
+            save_prices(index, s, bars, "Stooq daily data", "USD")
+            ok["us"] += 1
         except Exception as exc:
             failed[s] = str(exc)[:200]
             log("  price fail", s, exc)
-        time.sleep(0.6)
+            if ok["us"] == 0 and len(failed) >= 3:
+                failed["(rest of US)"] = "skipped after 3 failures in a row"
+                break
+        time.sleep(0.5)
+
+    # India: extend each stored series with NSE's daily files, backfilling ~16 months on first run.
+    have = {}
+    for s in india:
+        prev = read_json("prices/" + safe_name(s), {}).get("bars") or []
+        have[s] = {b[0]: b for b in prev}
+    latest = max((max(h) for h in have.values() if h), default=None)
+    need_backfill = any(len(h) < 250 for h in have.values())
+    start = dt.date.today() - dt.timedelta(days=480) if need_backfill or not latest else dt.date.fromisoformat(latest) + dt.timedelta(days=1)
+    day, files, errors = start, 0, 0
+    while day <= dt.date.today() and india:
+        if day.weekday() < 5 and (need_backfill or day.isoformat() not in next(iter(have.values()))):
+            try:
+                rows = nse_bhavcopy(day)
+                if rows:
+                    files += 1
+                    for s in india:
+                        bar = rows.get(s[:-3])
+                        if bar:
+                            have[s][bar[0]] = bar
+            except Exception as exc:
+                errors += 1
+                log("  bhavcopy", day, exc)
+                if files == 0 and errors >= 5:
+                    failed["(India)"] = "NSE daily files unavailable: %s" % exc
+                    break
+            time.sleep(0.25)
+        day += dt.timedelta(days=1)
+    for s in india:
+        bars = [have[s][k] for k in sorted(have[s])][-520:]
+        if len(bars) >= 60:
+            save_prices(index, s, bars, "NSE daily bhavcopy (nseindia.com)", "INR")
+            ok["india"] += 1
+        elif s not in failed:
+            failed[s] = "only %d bars from NSE files (symbol renamed or not EQ series?)" % len(bars)
+    log("  NSE files read:", files)
+
     index["updated"] = NOW
-    index["source"] = "Yahoo Finance chart data (unofficial), fetched by a scheduled GitHub Action"
     write_json("prices/index.json", index)
-    if ok == 0:
+    if not (ok["us"] or ok["india"]):
         raise RuntimeError("no prices fetched: %s" % json.dumps(failed)[:500])
-    return {"ok": ok, "failed": failed}
+    return {"ok": ok, "nse_files": files, "failed": failed}
 
 
 # ------------------------------------------------------------------ US 13F
@@ -160,7 +201,11 @@ def section_flows13f():
         raise RuntimeError("SEC_USER_AGENT is not set. SEC requires a name and email on every request.")
     fetcher = E.Fetcher(ua=ua, pause=0.15)
     filers = {f["cik"]: f for f in E.load_filers()}
-    index = E.ticker_index(fetcher)
+    try:
+        index = E.ticker_index(fetcher)
+    except Exception as exc:
+        log("  SEC ticker list unavailable, using the share-class map only:", exc)
+        index = None
     overrides = E.load_overrides([E.CLASSES])
     funds, flows, errors = [], [], {}
     for cik in FUNDS:
@@ -199,6 +244,10 @@ def section_flows13f():
         except Exception as exc:
             errors[cik] = str(exc)[:300]
             log("  13F fail", cik, exc)
+            if not funds and len(errors) >= 2 and all("403" in e for e in errors.values()):
+                raise RuntimeError("SEC refused every request (403 Forbidden). SEC needs a contact on each request: "
+                                   "set the repository variable SEC_USER_AGENT to 'Your Name your@email.com' "
+                                   "(repo Settings > Secrets and variables > Actions > Variables), then re-run.")
     if not funds:
         raise RuntimeError("no 13F filings read: %s" % json.dumps(errors)[:500])
     periods = sorted({f["period"] for f in funds})
