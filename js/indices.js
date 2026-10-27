@@ -63,10 +63,10 @@
 
     out.innerHTML = banner
       + '<div class="tiles">' + keyTiles.map(v => '<button class="tile tile-btn" data-idx="' + esc(v.NAME) + '"><b>' + esc(v.name) + '</b><span>' + num(v.close) + '</span><small class="' + cls(v.chg) + '">' + pct(v.chg) + ' today · 1Y ' + pct(v.r1y) + '</small></button>').join('') + '</div>'
-      + '<div class="panel"><h2>All NSE indices · ' + esc(last || '–') + '</h2>'
+      + '<div class="panel"><h2>NSE indices · ' + all.length + ' · ' + esc(last || '–') + '</h2>'
       + '<p>Breadth: <b class="up">▲ ' + up + ' up</b> · <b class="down">▼ ' + down + ' down</b> · ' + (today.length - up - down) + ' flat, of ' + today.length + ' indices. Colour shows the <b>' + PERIODS[ui.period] + '</b> return; stronger tint = bigger move (full tint at ±' + SCALE[ui.period] + '%).</p>'
       + (grid || '<p class="muted">No index matches.</p>')
-      + '<p class="muted">India VIX rises when expected volatility rises, so "up" there means more fear, not gains. Fixed-income indices move in small steps; read their returns, not their tint.</p></div>'
+      + '<p class="muted">India VIX rises when expected volatility rises, so "up" there means more fear, not gains. Fixed-income indices move in small steps; read their returns, not their tint. These are the ' + all.length + ' NSE indices in Angel One\'s instrument list; NSE publishes more (for example some newer thematic indices), which SmartAPI does not carry.</p></div>'
       + '<div class="panel"><h2>Table view · returns' + (hasVal ? ' and valuation' : '') + '</h2><div class="scroll"><table><thead><tr>' + col('name', 'Index', false) + col('group', 'Group', false) + col('close', 'Close')
       + col('chg', '1D') + col('r1w', '1W') + col('r1m', '1M') + col('r3m', '3M') + col('r1y', '1Y') + (hasVal ? col('pe', 'P/E') + col('pb', 'P/B') + col('dy', 'Div yield') : '') + '</tr></thead><tbody>'
       + rows.map(v => '<tr><td><button class="linkbtn" data-idx="' + esc(v.NAME) + '">' + esc(v.name) + '</button></td><td>' + esc(v.group) + '</td><td class="num">' + num(v.close) + '</td>'

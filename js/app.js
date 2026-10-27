@@ -115,7 +115,8 @@
     let file, hit;
     if (sym.index) {
       const idx = await repoIndices();
-      hit = idx.indices[D.indexSlug(sym.base)];
+      const want = D.indexSlug(sym.base);
+      hit = idx.indices[want] || Object.values(idx.indices).find(v => (v.aliases || []).includes(want));
       if (!hit) throw new Error(sym.base + ' is not an NSE index name in the daily snapshot. Pick one from the list (e.g. NIFTY 50, NIFTY BANK, NIFTY IT) or open the Indices tab.');
       file = 'data/indices/' + encodeURIComponent(hit.file);
     } else {

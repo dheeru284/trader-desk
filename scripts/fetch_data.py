@@ -287,11 +287,29 @@ class Angel(object):
 
 GROUPS = [
     ("Volatility", r"\bVIX\b"),
-    ("Fixed income", r"G-?SEC|\bGILT\b|\bBOND|T-?BILL|\bSDL\b|\bAAA\b|1D RATE|TARGET MATURITY|LIQUID|MONEY MARKET|CORPORATE"),
-    ("Strategy", r"ALPHA|LOW[ -]?VOL|\bLV\b|QUALITY|QLTY|VALUE|MOMENTUM|\bMOM\b|EQUAL[ -]?WEIGHT|EQL ?WGT|\bEW\b|DIV(IDEND)? OPP|HIGH BETA|GROWTH|ARBITRAGE|LEVERAGE|INVERSE"),
-    ("Broad market", r"^NIFTY ?(50|NEXT 50|100|200|500|MIDCAP|SMALLCAP|SMLCAP|MICROCAP|LARGEMIDCAP|LARGEMID|MIDSMALLCAP|MIDSMLCAP|TOTAL MARKET|TOTAL MKT|MIDCAP SELECT|MID SELECT)( ?\d+)?( SELECT)?$|^NIFTY ?500 (MULTICAP|LARGEMIDSMALL)"),
+    ("Fixed income", r"G-?SEC|\bGS\b|\bGILT\b|\bBOND|T-?BILL|\bSDL\b|\bAAA\b|1D RATE|TARGET MATURITY|LIQUID (FUND|RATE)|MONEY MARKET|CORPORATE"),
+    ("Strategy", r"ALPHA|LOW[ -]?VOL|\bLV\b|QUALITY|QUALTY|QLTY|LIQUID \d|LIQ \d|GROWTH SECTORS|GROWSECT|DIVIDEND POINTS|DIV POINT|\dX (INV|LEV)|VALUE|MOMENTUM|\bMOM\b|EQUAL[ -]?WEIGHT|EQL ?WGT|\bEW\b|DIV(IDEND)? OPP|HIGH BETA|GROWTH|ARBITRAGE|LEVERAGE|INVERSE"),
+    ("Broad market", r"^NIFTY ?(50|NEXT 50|100|200|500|MIDCAP|SMALLCAP|SMLCAP|MICROCAP|LARGEMIDCAP|LARGEMID|MIDSMALLCAP|MIDSMLCAP|TOTAL MARKET|TOTAL MKT|MIDCAP SELECT|MID SELECT|MIDSMALLCAP|MIDSML)( ?\d+)?( SELECT)?$|^NIFTY ?500 (MULTICAP|LARGEMIDSMALL)"),
     ("Sectoral", r"\b(BANK|AUTO|FIN|FINANCIAL|FMCG|IT|MEDIA|METAL|PHARMA|PSU BANK|PVT BANK|PRIVATE BANK|REALTY|HEALTHCARE|CONSUMER DURABLES|OIL ?& ?GAS|OIL AND GAS|CHEMICALS|ENERGY|COMMODITIES|INFRA(STRUCTURE)?|SERVICES SECTOR|CAPITAL MARKETS|INSURANCE|TELECOM)\b"),
 ]
+
+
+# Angel One's instrument list abbreviates index names; spell them out as NSE does.
+PRETTY = [(r"\bSMLCAP\b", "Smallcap"), (r"\bMIDSML\b", "MidSmallcap"), (r"\bMID SELECT\b", "Midcap Select"),
+          (r"\bEQL Wgt\b", "Equal Weight"), (r"LowVol ?(\d+)", r"Low Volatility \1"), (r"Qualty ?(\d+)", r"Quality \1"),
+          (r"\bQUALTY ?(\d+)", r"Quality \1"), (r"\bFin Service\b", "Financial Services"), (r"\bPvt Bank\b", "Private Bank"),
+          (r"\bGS Compsite\b", "G-Sec Composite"), (r"\bGS\b", "G-Sec"), (r"\bCln\b", "Clean Price"),
+          (r"\b(\d+) (\d+)Yr\b", r"\1-\2 Yr"), (r"\bDiv Opps\b", "Dividend Opportunities"), (r"\bDiv Point\b", "Dividend Points"),
+          (r"\bServ Sector\b", "Services Sector"), (r"\bLiq (\d+)", r"Liquid \1"), (r"\bGrowSect (\d+)", r"Growth Sectors \1"),
+          (r"\bPR 1x Inv\b", "1x Inverse (PR)"), (r"\bTR 1x Inv\b", "1x Inverse (TR)"), (r"\bPR 2x Lev\b", "2x Leverage (PR)"),
+          (r"\bTR 2x Lev\b", "2x Leverage (TR)"), (r"^NIFTY(?=\b|\d)", "Nifty")]
+
+
+def pretty_index(name):
+    for rx, rep in PRETTY:
+        name = re.sub(rx, rep, name, flags=re.I if rx.startswith("^") else 0)
+    name = re.sub(r"\b(MIDCAP|ALPHA)\b", lambda m: m.group(1).capitalize(), name)
+    return re.sub(r"\s+", " ", name).strip()
 
 
 def group_of(name):
@@ -330,7 +348,10 @@ def section_angel():
         # The instrument list keeps the readable index name ("Nifty Bank") in "symbol" and a
         # short code ("BANKNIFTY") in "name"; use whichever is the longer, readable one.
         cands = [str(m.get("symbol") or "").strip(), str(m.get("name") or "").strip()]
-        name = re.sub(r"\s+", " ", max(cands, key=lambda x: (" " in x, len(x))))
+        raw = re.sub(r"\s+", " ", max(cands, key=lambda x: (" " in x, len(x))))
+        if re.search(r"BEES|-NAV\b", raw, re.I):
+            continue  # an ETF's net asset value, not an index
+        name = pretty_index(raw)
         key = slug(name)
         if not key or key in out:
             continue
@@ -342,7 +363,8 @@ def section_angel():
             write_json("indices/" + fname, {"name": name, "token": m["token"], "source": "Angel One SmartAPI", "bars": bars[-520:]})
             out[key] = {"name": name, "group": group_of(name), "file": fname, "last": bars[-1][0], "close": bars[-1][4],
                         "chg": ret(bars, 1), "r1w": ret(bars, 5), "r1m": ret(bars, 21), "r3m": ret(bars, 63), "r1y": ret(bars, 250),
-                        "pe": None, "pb": None, "dy": None, "bars": len(bars)}
+                        "pe": None, "pb": None, "dy": None, "bars": len(bars),
+                        "aliases": sorted({slug(raw), slug(m.get("name") or "")} - {key, ""})}
         except Exception as exc:
             failed[name] = str(exc)[:160]
             if "token" in str(exc).lower() and "invalid" in str(exc).lower():
@@ -385,7 +407,7 @@ def section_prices_twelve():
     if not missing:
         return {"skipped": "every watchlist stock already has recent prices"}
     if not key:
-        raise RuntimeError("%d watchlist stocks have no recent prices and the TWELVE_DATA_KEY secret is not set." % len(missing))
+        return {"skipped": "optional TWELVE_DATA_KEY not set", "without_recent_prices": missing[:20]}
     ok, failed = 0, {}
     for s in missing:
         try:
