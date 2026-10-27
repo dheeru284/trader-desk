@@ -48,7 +48,7 @@ The daily job logs in to **your** Angel One account with SmartAPI's documented
 TOTP login and downloads daily candles. It only reads market data; it never
 places orders.
 
-1. Sign in at **smartapi.angelbroking.com** with your Angel One client ID and
+1. Sign in at **smartapi.angelone.in** with your Angel One client ID and
    create an app whose type includes historical data. Copy its **API key**.
 2. Enable TOTP for SmartAPI (the "Enable TOTP" option on the SmartAPI site).
    When the QR code is shown, also copy the **text key** shown with it (a
@@ -66,7 +66,7 @@ places orders.
 Secrets are encrypted by GitHub, passed only to the job, and never written to
 logs or data files. Anyone with write access to the repo's workflows could use
 them, so keep the repo's collaborators to yourself. You can revoke the API key
-at any time on smartapi.angelbroking.com.
+at any time on smartapi.angelone.in.
 
 Optional: `TWELVE_DATA_KEY` as a secret fills in watchlist stocks SmartAPI
 did not return.
