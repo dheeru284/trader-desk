@@ -372,6 +372,10 @@ def section_angel():
         time.sleep(0.4)  # SmartAPI historical data: a few requests a second
     if out:
         write_json("indices/index.json", {"updated": NOW, "source": "Angel One SmartAPI daily candles (NSE)", "indices": out})
+        keep = {v["file"] for v in out.values()} | {"index.json"}
+        for f in os.listdir(os.path.join(DATA, "indices")):
+            if f.endswith(".json") and f not in keep:
+                os.remove(os.path.join(DATA, "indices", f))  # renamed or delisted index
 
     wl = read_json("watchlist.json", {})
     pindex = read_json("prices/index.json", {"tickers": {}})
